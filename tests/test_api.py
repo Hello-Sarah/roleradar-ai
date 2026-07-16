@@ -33,3 +33,25 @@ def test_full_job_workflow(client: TestClient) -> None:
 
 def test_validation_rejects_short_description(client: TestClient) -> None:
     assert client.post("/api/v1/jobs", json={**JOB, "description": "Too short"}).status_code == 422
+
+
+def test_create_job_from_pasted_text(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/jobs/from-text",
+        json={
+            "text": (
+                "Company: Databricks\n"
+                "Role: Applied AI Engineer\n"
+                "Location: Singapore\n"
+                "https://example.com/jobs/ai-2\n"
+                "Build applied AI products using Python, SQL, Docker, AWS, and RAG."
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["company"] == "Databricks"
+    assert job["title"] == "Applied AI Engineer"
+    assert job["location"] == "Singapore"
+    assert job["source"] == "pasted_text"

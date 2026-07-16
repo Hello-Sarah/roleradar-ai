@@ -73,6 +73,14 @@ class JobCreate(BaseModel):
         return self
 
 
+class JobPasteCreate(BaseModel):
+    text: str = Field(
+        min_length=40,
+        max_length=100_000,
+        description="Raw text copied from a job posting page",
+    )
+
+
 class ClassificationRead(BaseModel):
     category: RoleCategory
     confidence: float = Field(ge=0, le=1)

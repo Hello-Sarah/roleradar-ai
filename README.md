@@ -6,7 +6,9 @@ skills are missing, and what action to take next. It is intentionally not a job 
 
 ## What works
 
-- Paste a job and receive normalized storage, duplicate detection, role classification,
+- Paste an entire job page into one text box and automatically extract its company,
+  title, location, URL, date, and description before normalized storage and duplicate detection.
+  The job then receives role classification,
   a deterministic fit score, evidence, strengths, gaps, and a recommendation.
 - Maintain a structured candidate profile and track jobs through New, Saved, Applied,
   Interview, Rejected, Offer, Ignored.
@@ -149,4 +151,3 @@ structured feed is verified and covered by a contract test.
 ## License
 
 This portfolio MVP is provided under the MIT License.
-

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database.session import get_db
+from app.ingestion.text_extractor import extract_job_from_text
 from app.schemas import (
     ApplicationStatus,
     CandidateProfileCreate,
@@ -12,6 +13,7 @@ from app.schemas import (
     DashboardRead,
     DigestRead,
     JobCreate,
+    JobPasteCreate,
     JobRead,
     StatusUpdate,
 )
@@ -51,6 +53,15 @@ def write_profile(payload: CandidateProfileCreate, db: Db) -> CandidateProfileRe
 def create_job(payload: JobCreate, db: Db, settings: AppSettings) -> JobRead:
     try:
         return to_job_read(create_and_analyze_job(db, payload, settings))
+    except DuplicateJobError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.post("/jobs/from-text", response_model=JobRead, status_code=status.HTTP_201_CREATED)
+def create_job_from_text(payload: JobPasteCreate, db: Db, settings: AppSettings) -> JobRead:
+    try:
+        extracted = extract_job_from_text(payload.text)
+        return to_job_read(create_and_analyze_job(db, extracted, settings))
     except DuplicateJobError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 

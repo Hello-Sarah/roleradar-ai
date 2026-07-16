@@ -1,5 +1,4 @@
 import os
-from datetime import date
 
 import pandas as pd
 import streamlit as st
@@ -78,27 +77,25 @@ try:
             render_job(job)
 
     with add_tab:
-        st.subheader("Paste a job description")
+        st.subheader("Paste the complete job posting")
+        st.caption(
+            "Copy everything from the job page. RoleRadar will identify the company, "
+            "title, location, URL, posting date, and description automatically."
+        )
         with st.form("job-form", clear_on_submit=True):
-            company = st.text_input("Company")
-            title = st.text_input("Title")
-            location = st.text_input("Location")
-            url = st.text_input("Job URL (optional)")
-            posting_date = st.date_input("Posting date", value=date.today())
-            description = st.text_area("Description", height=320)
-            submitted = st.form_submit_button("Analyze job", type="primary")
+            pasted_text = st.text_area(
+                "Job posting text",
+                height=480,
+                placeholder=(
+                    "Paste the full job page here — header, company, location, URL, "
+                    "responsibilities, and requirements..."
+                ),
+            )
+            submitted = st.form_submit_button("Extract & analyze", type="primary")
         if submitted:
-            payload = {
-                "company": company,
-                "title": title,
-                "location": location,
-                "url": url or None,
-                "posting_date": posting_date.isoformat(),
-                "description": description,
-                "source": "manual",
-            }
-            job = client.post("/api/v1/jobs", payload)
+            job = client.post("/api/v1/jobs/from-text", {"text": pasted_text})
             st.success(f"Analysis complete: {job['analysis']['fit_score']}/100")
+            st.write(f"Recognized: **{job['company']} · {job['title']} · {job['location']}**")
             render_job(job)
 
     with tracker_tab:
