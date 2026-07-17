@@ -79,24 +79,63 @@ try:
     with add_tab:
         st.subheader("Paste the complete job posting")
         st.caption(
-            "Copy everything from the job page. RoleRadar will identify the company, "
-            "title, location, URL, posting date, and description automatically."
+            "Step 1: paste everything from the job page. Step 2: review and correct "
+            "the extracted fields before RoleRadar saves or analyzes anything."
         )
-        with st.form("job-form", clear_on_submit=True):
-            pasted_text = st.text_area(
-                "Job posting text",
-                height=480,
-                placeholder=(
-                    "Paste the full job page here — header, company, location, URL, "
-                    "responsibilities, and requirements..."
-                ),
-            )
-            submitted = st.form_submit_button("Extract & analyze", type="primary")
-        if submitted:
-            job = client.post("/api/v1/jobs/from-text", {"text": pasted_text})
-            st.success(f"Analysis complete: {job['analysis']['fit_score']}/100")
-            st.write(f"Recognized: **{job['company']} · {job['title']} · {job['location']}**")
-            render_job(job)
+        extracted = st.session_state.get("extracted_job")
+        if extracted is None:
+            with st.form("job-extraction-form", clear_on_submit=True):
+                pasted_text = st.text_area(
+                    "Job posting text",
+                    height=480,
+                    placeholder=(
+                        "Paste the full job page here — header, company, location, URL, "
+                        "responsibilities, and requirements..."
+                    ),
+                )
+                extract_submitted = st.form_submit_button("Extract fields", type="primary")
+            if extract_submitted:
+                st.session_state["extracted_job"] = client.post(
+                    "/api/v1/jobs/extract", {"text": pasted_text}
+                )
+                st.session_state.pop("last_analyzed_job", None)
+                st.rerun()
+        else:
+            st.info("Review the extracted fields. Nothing has been saved yet.")
+            with st.form("job-confirmation-form"):
+                company = st.text_input("Company", value=extracted["company"])
+                title = st.text_input("Job title", value=extracted["title"])
+                location = st.text_input("Location", value=extracted["location"])
+                url = st.text_input("Job URL (optional)", value=extracted.get("url") or "")
+                posting_date = st.date_input(
+                    "Posting date (optional)", value=extracted.get("posting_date")
+                )
+                description = st.text_area(
+                    "Job description", value=extracted["description"], height=400
+                )
+                confirm_submitted = st.form_submit_button("Confirm & analyze", type="primary")
+            reset_col, _ = st.columns([1, 4])
+            if reset_col.button("Start over", use_container_width=True):
+                st.session_state.pop("extracted_job", None)
+                st.rerun()
+            if confirm_submitted:
+                payload = {
+                    "company": company,
+                    "title": title,
+                    "location": location,
+                    "url": url or None,
+                    "posting_date": posting_date.isoformat() if posting_date else None,
+                    "description": description,
+                    "source": "pasted_text",
+                }
+                st.session_state["last_analyzed_job"] = client.post("/api/v1/jobs", payload)
+                st.session_state.pop("extracted_job", None)
+                st.rerun()
+
+        completed_job = st.session_state.get("last_analyzed_job")
+        if completed_job:
+            st.success(f"Analysis complete: {completed_job['analysis']['fit_score']}/100")
+            render_job(completed_job)
 
     with tracker_tab:
         jobs = client.get("/api/v1/jobs")

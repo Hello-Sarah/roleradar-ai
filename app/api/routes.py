@@ -66,6 +66,12 @@ def create_job_from_text(payload: JobPasteCreate, db: Db, settings: AppSettings)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
+@router.post("/jobs/extract", response_model=JobCreate)
+def preview_job_extraction(payload: JobPasteCreate) -> JobCreate:
+    """Extract editable fields without writing a job to the database."""
+    return extract_job_from_text(payload.text)
+
+
 @router.get("/jobs", response_model=list[JobRead])
 def read_jobs(
     db: Db,

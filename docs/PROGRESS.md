@@ -14,6 +14,8 @@ and GitHub Actions.
 - Manual job ingestion with normalization and fingerprint-based duplicate detection.
 - One-box job ingestion: users can paste an entire job page and automatically extract
   company, title, location, URL, posting date, and the full description.
+- Editable extraction preview: extraction is read-only until the user reviews, corrects,
+  and confirms every field; only then is the job persisted and analyzed.
 - Transparent role classification with confidence and evidence.
 - Deterministic 100-point fit scoring across role, location, domain, and technical fit.
 - Structured AI explanations that cannot modify the deterministic score, with a safe
@@ -36,8 +38,7 @@ and GitHub Actions.
 
 ## Next recommended milestone
 
-1. Add an editable extraction preview before persisting a pasted job.
-2. Version scoring rubrics and candidate profiles before supporting reanalysis.
-3. Add verified structured-feed adapters one company at a time with contract tests.
-4. Add golden evaluation data for classification and skill-gap precision.
-5. Add Alembic migrations before evolving a persistent production database.
+1. Version scoring rubrics and candidate profiles before supporting reanalysis.
+2. Add verified structured-feed adapters one company at a time with contract tests.
+3. Add golden evaluation data for classification and skill-gap precision.
+4. Add Alembic migrations before evolving a persistent production database.

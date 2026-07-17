@@ -7,7 +7,8 @@ skills are missing, and what action to take next. It is intentionally not a job 
 ## What works
 
 - Paste an entire job page into one text box and automatically extract its company,
-  title, location, URL, date, and description before normalized storage and duplicate detection.
+  title, location, URL, date, and description. Review and edit the extraction before
+  normalized storage and duplicate detection.
   The job then receives role classification,
   a deterministic fit score, evidence, strengths, gaps, and a recommendation.
 - Maintain a structured candidate profile and track jobs through New, Saved, Applied,

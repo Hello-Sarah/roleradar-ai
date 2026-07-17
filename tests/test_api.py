@@ -55,3 +55,24 @@ def test_create_job_from_pasted_text(client: TestClient) -> None:
     assert job["title"] == "Applied AI Engineer"
     assert job["location"] == "Singapore"
     assert job["source"] == "pasted_text"
+
+
+def test_preview_extraction_does_not_persist_job(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/jobs/extract",
+        json={
+            "text": (
+                "Company: OpenAI\n"
+                "Role: Forward Deployed Engineer\n"
+                "Location: Hong Kong\n"
+                "Build and deploy reliable AI systems with customers using Python and SQL."
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    extracted = response.json()
+    assert extracted["company"] == "OpenAI"
+    assert extracted["title"] == "Forward Deployed Engineer"
+    assert extracted["location"] == "Hong Kong"
+    assert client.get("/api/v1/jobs").json() == []
