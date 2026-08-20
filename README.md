@@ -9,6 +9,9 @@ skills are missing, and what action to take next. It is intentionally not a job 
 - Paste an entire job page into one text box and automatically extract its company,
   title, location, URL, date, and description. Review and edit the extraction before
   normalized storage and duplicate detection.
+- Paste a public job URL to retrieve, record, and analyze the posting automatically.
+  URL ingestion rejects private-network destinations, validates redirects, and keeps
+  the text-paste workflow as a fallback for JavaScript-only or access-controlled pages.
   The job then receives role classification,
   a deterministic fit score, evidence, strengths, gaps, and a recommendation.
 - Maintain a structured candidate profile and track jobs through New, Saved, Applied,

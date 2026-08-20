@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 
 class RoleCategory(StrEnum):
@@ -79,6 +79,10 @@ class JobPasteCreate(BaseModel):
         max_length=100_000,
         description="Raw text copied from a job posting page",
     )
+
+
+class JobUrlCreate(BaseModel):
+    url: AnyHttpUrl
 
 
 class ClassificationRead(BaseModel):

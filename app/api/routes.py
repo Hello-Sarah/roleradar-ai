@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.config import Settings, get_settings
 from app.database.session import get_db
 from app.ingestion.text_extractor import extract_job_from_text
+from app.ingestion.url_fetcher import JobPageFetchError, fetch_job_from_url
 from app.schemas import (
     ApplicationStatus,
     CandidateProfileCreate,
@@ -15,6 +16,7 @@ from app.schemas import (
     JobCreate,
     JobPasteCreate,
     JobRead,
+    JobUrlCreate,
     StatusUpdate,
 )
 from app.services.job_service import (
@@ -70,6 +72,20 @@ def create_job_from_text(payload: JobPasteCreate, db: Db, settings: AppSettings)
 def preview_job_extraction(payload: JobPasteCreate) -> JobCreate:
     """Extract editable fields without writing a job to the database."""
     return extract_job_from_text(payload.text)
+
+
+@router.post("/jobs/from-url", response_model=JobRead, status_code=status.HTTP_201_CREATED)
+def create_job_from_url(payload: JobUrlCreate, db: Db, settings: AppSettings) -> JobRead:
+    """Fetch, persist, and analyze a publicly accessible job posting URL."""
+    try:
+        extracted = fetch_job_from_url(str(payload.url))
+        return to_job_read(create_and_analyze_job(db, extracted, settings))
+    except JobPageFetchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+    except DuplicateJobError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
 @router.get("/jobs", response_model=list[JobRead])

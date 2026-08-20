@@ -16,6 +16,8 @@ and GitHub Actions.
   company, title, location, URL, posting date, and the full description.
 - Editable extraction preview: extraction is read-only until the user reviews, corrects,
   and confirms every field; only then is the job persisted and analyzed.
+- Public job-link ingestion with automatic recording and analysis, structured JobPosting
+  metadata support, redirect validation, response limits, and private-network blocking.
 - Transparent role classification with confidence and evidence.
 - Deterministic 100-point fit scoring across role, location, domain, and technical fit.
 - Structured AI explanations that cannot modify the deterministic score, with a safe
