@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings
 from app.schemas import CandidateProfileRead, ClassificationRead, JobCreate
-from app.scoring.engine import ScoringResult
+from app.scoring.v2 import CareerFitV2
 
 logger = logging.getLogger(__name__)
 
@@ -17,16 +17,21 @@ class LLMExplanation(BaseModel):
     summary: str = Field(min_length=20, max_length=500)
 
 
-def _fallback_summary(job: JobCreate, result: ScoringResult) -> LLMExplanation:
+def _fallback_summary(job: JobCreate, result: CareerFitV2) -> LLMExplanation:
+    strengths = [flag.code for flag in result.matched_green_flags]
+    gaps = [
+        weak
+        for dimension in result.dimensions.values()
+        for weak in dimension.missing_or_weak_evidence
+    ]
     return LLMExplanation(
-        strengths=result.strengths,
-        gaps=result.gaps,
-        evidence=result.evidence,
+        strengths=strengths or ["NO_MATCHED_GREEN_FLAGS"],
+        gaps=gaps or ["NO_WEAK_DIMENSIONS"],
+        evidence=[f"{item.id}: {item.text}" for item in result.evidence],
         summary=(
-            f"{job.title} at {job.company} is a {result.recommendation.value.lower()} opportunity "
-            f"with a deterministic fit score of {result.fit_score}/100. "
-            "The largest decision factors are role, location, domain, "
-            "and required-skill alignment."
+            f"{job.title} at {job.company} is in the {result.recommendation_band} band "
+            f"with a deterministic fit score of {result.total_score}/100. "
+            "The score is derived only from the six Career Fit V2 dimensions."
         ),
     )
 
@@ -36,7 +41,7 @@ def explain_fit(
     job: JobCreate,
     profile: CandidateProfileRead,
     classification: ClassificationRead,
-    result: ScoringResult,
+    result: CareerFitV2,
     settings: Settings,
 ) -> tuple[LLMExplanation, str]:
     if not settings.ai_explanations_enabled or not settings.openai_api_key:
@@ -52,12 +57,17 @@ def explain_fit(
         "profile": profile.model_dump(mode="json"),
         "classification": classification.model_dump(mode="json"),
         "deterministic_result": {
-            "fit_score": result.fit_score,
-            "breakdown": result.breakdown.model_dump(),
-            "strengths": result.strengths,
-            "gaps": result.gaps,
-            "evidence": result.evidence,
-            "recommendation": result.recommendation,
+            "fit_score": result.total_score,
+            "dimensions": {
+                name: dimension.model_dump(mode="json")
+                for name, dimension in result.dimensions.items()
+            },
+            "green_flags": [flag.model_dump(mode="json") for flag in result.matched_green_flags],
+            "red_flags": [flag.model_dump(mode="json") for flag in result.matched_red_flags],
+            "critical_warnings": [
+                warning.model_dump(mode="json") for warning in result.critical_warnings
+            ],
+            "recommendation": result.recommendation_band,
         },
     }
     try:

@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -26,10 +28,10 @@ from app.schemas import (
     DigestRead,
     JobCreate,
     JobRead,
-    ScoreBreakdown,
     TrendPoint,
 )
-from app.scoring.engine import score_job
+from app.scoring.rules import PROMPT_VERSION, SCORING_VERSION
+from app.scoring.v2 import JobEvidence, ProfileEvidence, score_job_v2
 from app.services.profile_service import get_or_create_profile, to_profile_read
 
 logger = logging.getLogger(__name__)
@@ -40,10 +42,37 @@ class DuplicateJobError(ValueError):
 
 
 def _job_query():
-    return select(Job).options(
-        selectinload(Job.classification),
-        selectinload(Job.analysis),
-        selectinload(Job.application_events),
+    return (
+        select(Job)
+        .options(
+            selectinload(Job.classification),
+            selectinload(Job.analyses),
+            selectinload(Job.application_events),
+        )
+        .execution_options(populate_existing=True)
+    )
+
+
+def to_analysis_read(analysis: JobAnalysis) -> AnalysisRead:
+    return AnalysisRead(
+        id=analysis.id,
+        job_id=analysis.job_id,
+        profile_id=analysis.profile_id,
+        created_at=analysis.created_at,
+        scoring_version=analysis.scoring_version,
+        profile_version=analysis.profile_version,
+        rubric_version=analysis.rubric_version,
+        model_version=analysis.model_version,
+        prompt_version=analysis.prompt_version,
+        fit_score=analysis.fit_score,
+        score_breakdown=analysis.score_breakdown,
+        score_details=analysis.score_details,
+        strengths=analysis.strengths,
+        gaps=analysis.gaps,
+        evidence=analysis.evidence,
+        recommendation=analysis.recommendation,
+        summary=analysis.summary,
+        model_used=analysis.model_used,
     )
 
 
@@ -57,16 +86,7 @@ def to_job_read(job: Job) -> JobRead:
         )
     analysis = None
     if job.analysis:
-        analysis = AnalysisRead(
-            fit_score=job.analysis.fit_score,
-            score_breakdown=ScoreBreakdown.model_validate(job.analysis.score_breakdown),
-            strengths=job.analysis.strengths,
-            gaps=job.analysis.gaps,
-            evidence=job.analysis.evidence,
-            recommendation=job.analysis.recommendation,
-            summary=job.analysis.summary,
-            model_used=job.analysis.model_used,
-        )
+        analysis = to_analysis_read(job.analysis)
     return JobRead(
         id=job.id,
         company=job.company,
@@ -87,6 +107,77 @@ def to_job_read(job: Job) -> JobRead:
     )
 
 
+def _profile_version(profile: CandidateProfile) -> str:
+    snapshot = {
+        "name": profile.name,
+        "target_roles": profile.target_roles,
+        "preferred_locations": profile.preferred_locations,
+        "future_locations": profile.future_locations,
+        "domain_strengths": profile.domain_strengths,
+        "technical_strengths": profile.technical_strengths,
+        "development_gaps": profile.development_gaps,
+    }
+    digest = hashlib.sha256(
+        json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return f"profile-sha256:{digest}"
+
+
+def _build_analysis(job: Job, profile: CandidateProfile, settings: Settings) -> JobAnalysis:
+    score = score_job_v2(
+        JobEvidence(title=job.title, description=job.description),
+        ProfileEvidence(
+            target_roles=profile.target_roles,
+            domain_strengths=profile.domain_strengths,
+            technical_strengths=profile.technical_strengths,
+            development_gaps=profile.development_gaps,
+        ),
+    )
+    details = score.model_dump(mode="json")
+    strengths = [flag.code for flag in score.matched_green_flags]
+    gaps = [
+        weak
+        for dimension in score.dimensions.values()
+        for weak in dimension.missing_or_weak_evidence
+    ]
+    explanation, model_used = explain_fit(
+        job=JobCreate(
+            company=job.company,
+            title=job.title,
+            location=job.location,
+            url=job.url,
+            posting_date=job.posting_date,
+            description=job.description,
+            source=job.source,
+        ),
+        profile=to_profile_read(profile),
+        classification=ClassificationRead(
+            category=job.classification.category,
+            confidence=job.classification.confidence,
+            evidence=job.classification.evidence,
+        ),
+        result=score,
+        settings=settings,
+    )
+    return JobAnalysis(
+        profile_id=profile.id,
+        scoring_version=SCORING_VERSION,
+        profile_version=_profile_version(profile),
+        rubric_version=SCORING_VERSION,
+        model_version=model_used,
+        prompt_version=PROMPT_VERSION,
+        fit_score=score.total_score,
+        score_breakdown={name: dimension.score for name, dimension in score.dimensions.items()},
+        score_details=details,
+        strengths=strengths or ["NO_MATCHED_GREEN_FLAGS"],
+        gaps=gaps or ["NO_WEAK_DIMENSIONS"],
+        evidence=[f"{item.id}: {item.text}" for item in score.evidence],
+        recommendation=score.recommendation_band,
+        summary=explanation.summary,
+        model_used=model_used,
+    )
+
+
 def create_and_analyze_job(db: Session, payload: JobCreate, settings: Settings) -> Job:
     normalized = normalize_job(payload)
     fingerprint = job_fingerprint(normalized)
@@ -95,20 +186,6 @@ def create_and_analyze_job(db: Session, payload: JobCreate, settings: Settings) 
 
     profile: CandidateProfile = get_or_create_profile(db)
     classification = classify_job(normalized.title, normalized.description)
-    score = score_job(
-        title=normalized.title,
-        location=normalized.location,
-        description=normalized.description,
-        classification=classification,
-        profile=to_profile_read(profile),
-    )
-    explanation, model_used = explain_fit(
-        job=normalized,
-        profile=to_profile_read(profile),
-        classification=classification,
-        result=score,
-        settings=settings,
-    )
     job = Job(
         fingerprint=fingerprint,
         **normalized.model_dump(mode="python", exclude={"url"}),
@@ -116,17 +193,7 @@ def create_and_analyze_job(db: Session, payload: JobCreate, settings: Settings) 
         status=ApplicationStatus.NEW.value,
     )
     job.classification = JobClassification(**classification.model_dump(mode="json"))
-    job.analysis = JobAnalysis(
-        profile_id=profile.id,
-        fit_score=score.fit_score,
-        score_breakdown=score.breakdown.model_dump(),
-        strengths=explanation.strengths,
-        gaps=explanation.gaps,
-        evidence=explanation.evidence,
-        recommendation=score.recommendation.value,
-        summary=explanation.summary,
-        model_used=model_used,
-    )
+    job.analyses.append(_build_analysis(job, profile, settings))
     db.add(job)
     try:
         db.commit()
@@ -150,14 +217,47 @@ def list_jobs(
     min_fit_score: int | None = None,
     limit: int = 100,
 ) -> list[Job]:
-    query = (
-        _job_query().join(Job.analysis, isouter=True).order_by(desc(Job.created_at)).limit(limit)
-    )
+    query = _job_query().order_by(desc(Job.created_at)).limit(limit)
     if status:
         query = query.where(Job.status == status.value)
     if min_fit_score is not None:
-        query = query.where(JobAnalysis.fit_score >= min_fit_score)
+        latest_score = (
+            select(JobAnalysis.fit_score)
+            .where(JobAnalysis.job_id == Job.id)
+            .order_by(desc(JobAnalysis.id))
+            .limit(1)
+            .correlate(Job)
+            .scalar_subquery()
+        )
+        query = query.where(latest_score >= min_fit_score)
     return list(db.scalars(query).all())
+
+
+def list_analyses(db: Session, job_id: int) -> list[JobAnalysis]:
+    get_job(db, job_id)
+    return list(
+        db.scalars(
+            select(JobAnalysis).where(JobAnalysis.job_id == job_id).order_by(desc(JobAnalysis.id))
+        ).all()
+    )
+
+
+def reanalyze_job(db: Session, job_id: int, settings: Settings) -> JobAnalysis:
+    job = get_job(db, job_id)
+    profile = get_or_create_profile(db)
+    analysis = _build_analysis(job, profile, settings)
+    job.analyses.append(analysis)
+    db.commit()
+    db.refresh(analysis)
+    logger.info(
+        "job reanalyzed",
+        extra={
+            "job_id": job_id,
+            "analysis_id": analysis.id,
+            "scoring_version": analysis.scoring_version,
+        },
+    )
+    return analysis
 
 
 def update_status(db: Session, job_id: int, status: ApplicationStatus) -> Job:

@@ -1,0 +1,250 @@
+"""Deterministic, evidence-linked Career Fit Score V2."""
+
+import re
+from collections.abc import Iterable
+
+from pydantic import BaseModel, Field, model_validator
+
+from app.scoring.rules import (
+    AI_TITLE_PHRASES,
+    COUNTER_EVIDENCE_PHRASES,
+    DIMENSION_MAXIMA,
+    DIMENSION_RULES,
+    GREEN_FLAG_PHRASES,
+    RED_FLAG_PHRASES,
+    SCORING_VERSION,
+)
+
+
+class EvidenceItem(BaseModel, frozen=True):
+    id: str
+    text: str
+
+
+class JobEvidence(BaseModel):
+    title: str
+    description: str = ""
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def populate_evidence(self) -> "JobEvidence":
+        if self.evidence:
+            return self
+        snippets = [part.strip() for part in re.split(r"(?<=[.!?])\s+|[\r\n]+", self.description)]
+        self.evidence = [
+            EvidenceItem(id=f"jd-{index:03d}", text=text)
+            for index, text in enumerate(snippets, 1)
+            if text
+        ]
+        if self.title:
+            self.evidence.insert(0, EvidenceItem(id="jd-title", text=self.title.strip()))
+        return self
+
+
+class ProfileEvidence(BaseModel):
+    target_roles: list[str] = Field(default_factory=list)
+    domain_strengths: list[str] = Field(default_factory=list)
+    technical_strengths: list[str] = Field(default_factory=list)
+    development_gaps: list[str] = Field(default_factory=list)
+
+
+class Deduction(BaseModel, frozen=True):
+    code: str
+    points: int = Field(gt=0)
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class DimensionScore(BaseModel, frozen=True):
+    score: int = Field(ge=0)
+    max_score: int = Field(gt=0)
+    evidence_ids: list[str] = Field(default_factory=list)
+    missing_or_weak_evidence: list[str] = Field(default_factory=list)
+    deductions: list[Deduction] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_bound_and_support(self) -> "DimensionScore":
+        if self.score > self.max_score:
+            raise ValueError("dimension score exceeds its maximum")
+        if self.score and not self.evidence_ids:
+            raise ValueError("a non-zero dimension must reference JD evidence")
+        return self
+
+
+class EvidenceFlag(BaseModel, frozen=True):
+    code: str
+    evidence_ids: list[str] = Field(min_length=1)
+
+
+class CriticalWarning(EvidenceFlag):
+    message: str
+
+
+class CareerFitV2(BaseModel, frozen=True):
+    scoring_version: str = SCORING_VERSION
+    dimensions: dict[str, DimensionScore]
+    evidence: list[EvidenceItem]
+    matched_green_flags: list[EvidenceFlag]
+    matched_red_flags: list[EvidenceFlag]
+    critical_warnings: list[CriticalWarning]
+    total_score: int = Field(ge=0, le=100)
+    recommendation_band: str
+    concise_explanation: str
+    recommended_next_action: str
+
+    @model_validator(mode="after")
+    def validate_total_and_dimensions(self) -> "CareerFitV2":
+        if set(self.dimensions) != set(DIMENSION_MAXIMA):
+            raise ValueError("Career Fit V2 requires exactly six dimensions")
+        derived_total = sum(dimension.score for dimension in self.dimensions.values())
+        if self.total_score != derived_total:
+            raise ValueError("total score must be derived only from dimensions")
+        return self
+
+    @property
+    def version(self) -> str:
+        return self.scoring_version
+
+    @property
+    def total(self) -> int:
+        return self.total_score
+
+    @property
+    def band(self) -> str:
+        return self.recommendation_band
+
+
+def recommendation_band(score: int) -> str:
+    if not 0 <= score <= 100:
+        raise ValueError("score must be between 0 and 100")
+    if score >= 85:
+        return "Must Apply"
+    if score >= 70:
+        return "Strong Apply"
+    if score >= 55:
+        return "Selective"
+    return "Skip"
+
+
+def _contains(text: str, phrase: str) -> bool:
+    normalized = text.casefold().replace("→", " to ")
+    candidate = phrase.casefold().replace("→", " to ")
+    return bool(re.search(rf"(?<!\w){re.escape(candidate)}(?!\w)", normalized))
+
+
+def _matching_ids(evidence: Iterable[EvidenceItem], phrases: Iterable[str]) -> list[str]:
+    return list(
+        dict.fromkeys(
+            item.id for item in evidence if any(_contains(item.text, phrase) for phrase in phrases)
+        )
+    )
+
+
+def _match_count(evidence: Iterable[EvidenceItem], phrases: Iterable[str]) -> int:
+    phrase_list = tuple(phrases)
+    return sum(1 for item in evidence for phrase in phrase_list if _contains(item.text, phrase))
+
+
+def _flags(
+    evidence: list[EvidenceItem], phrase_groups: dict[str, tuple[str, ...]]
+) -> list[EvidenceFlag]:
+    return [
+        EvidenceFlag(code=code, evidence_ids=ids)
+        for code, phrases in phrase_groups.items()
+        if (ids := _matching_ids(evidence, phrases))
+    ]
+
+
+def score_job_v2(job: JobEvidence, profile: ProfileEvidence) -> CareerFitV2:
+    """Score JD evidence with bounded V2 rules; no model output enters this calculation."""
+    del profile  # Profile provenance is linked at persistence; V2 scores the role's career value.
+    evidence = job.evidence
+    red_flags = _flags(evidence, RED_FLAG_PHRASES)
+    green_flags = _flags(evidence, GREEN_FLAG_PHRASES)
+    red_count = _match_count(
+        evidence, (phrase for phrases in RED_FLAG_PHRASES.values() for phrase in phrases)
+    )
+    counter_count = _match_count(evidence, COUNTER_EVIDENCE_PHRASES)
+    red_dominant = red_count >= 2 and red_count > counter_count
+    ai_title = any(_contains(job.title, phrase) for phrase in AI_TITLE_PHRASES)
+    pmo_warning = ai_title and red_dominant
+
+    dimensions: dict[str, DimensionScore] = {}
+    for name, rules in DIMENSION_RULES.items():
+        score = 0
+        support: list[str] = []
+        for rule in rules:
+            ids = _matching_ids(evidence, rule.phrases)
+            if ids:
+                score += rule.points
+                support.extend(ids)
+        score = min(score, DIMENSION_MAXIMA[name])
+        deductions: list[Deduction] = []
+        if red_dominant and name in {
+            "ownership",
+            "build_and_ship",
+            "product_exposure",
+            "technical_exposure",
+        }:
+            red_ids = list(
+                dict.fromkeys(item_id for flag in red_flags for item_id in flag.evidence_ids)
+            )
+            requested = 4 if pmo_warning and name in {"ownership", "build_and_ship"} else 2
+            applied = min(score, requested)
+            if applied:
+                deductions.append(
+                    Deduction(
+                        code="PMO_DOMINANCE" if pmo_warning else "RED_FLAG_DOMINANCE",
+                        points=applied,
+                        evidence_ids=red_ids,
+                    )
+                )
+                score -= applied
+        dimensions[name] = DimensionScore(
+            score=score,
+            max_score=DIMENSION_MAXIMA[name],
+            evidence_ids=list(dict.fromkeys(support)) if score else [],
+            missing_or_weak_evidence=[]
+            if score == DIMENSION_MAXIMA[name]
+            else [f"{name.upper()}_EVIDENCE_WEAK"],
+            deductions=deductions,
+        )
+
+    warnings = (
+        [
+            CriticalWarning(
+                code="AI_TITLE_PMO_SUBSTANCE",
+                evidence_ids=list(
+                    dict.fromkeys(item_id for flag in red_flags for item_id in flag.evidence_ids)
+                ),
+                message=(
+                    "The AI title is not supported by build-heavy responsibilities; "
+                    "PMO work dominates the JD."
+                ),
+            )
+        ]
+        if pmo_warning
+        else []
+    )
+    total = sum(dimension.score for dimension in dimensions.values())
+    band = recommendation_band(total)
+    strongest = max(dimensions, key=lambda dimension: dimensions[dimension].score)
+    next_action = (
+        "Apply and validate scope with the hiring manager."
+        if total >= 70
+        else "Clarify hands-on ownership and production-building scope before applying."
+        if total >= 55
+        else "Prioritize roles with stronger hands-on AI building and ownership evidence."
+    )
+    return CareerFitV2(
+        dimensions=dimensions,
+        evidence=evidence,
+        matched_green_flags=green_flags,
+        matched_red_flags=red_flags,
+        critical_warnings=warnings,
+        total_score=total,
+        recommendation_band=band,
+        concise_explanation=(
+            f"Deterministic {SCORING_VERSION} score; strongest dimension: {strongest}."
+        ),
+        recommended_next_action=next_action,
+    )

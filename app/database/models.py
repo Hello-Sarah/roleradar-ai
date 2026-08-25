@@ -43,14 +43,21 @@ class Job(TimestampMixin, Base):
     classification: Mapped["JobClassification | None"] = relationship(
         back_populates="job", cascade="all, delete-orphan", uselist=False
     )
-    analysis: Mapped["JobAnalysis | None"] = relationship(
-        back_populates="job", cascade="all, delete-orphan", uselist=False
+    analyses: Mapped[list["JobAnalysis"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="JobAnalysis.id.desc()",
     )
     application_events: Mapped[list["ApplicationEvent"]] = relationship(
         back_populates="job",
         cascade="all, delete-orphan",
         order_by="ApplicationEvent.occurred_at.desc()",
     )
+
+    @property
+    def analysis(self) -> "JobAnalysis | None":
+        """Return the newest immutable analysis for backward-compatible job reads."""
+        return self.analyses[0] if self.analyses else None
 
 
 class JobClassification(TimestampMixin, Base):
@@ -69,10 +76,16 @@ class JobAnalysis(TimestampMixin, Base):
     __tablename__ = "job_analyses"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), unique=True, index=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
     profile_id: Mapped[int] = mapped_column(ForeignKey("candidate_profiles.id"))
+    scoring_version: Mapped[str] = mapped_column(String(50), default="legacy-v1")
+    profile_version: Mapped[str] = mapped_column(String(100), default="legacy-profile")
+    rubric_version: Mapped[str] = mapped_column(String(50), default="legacy-v1")
+    model_version: Mapped[str] = mapped_column(String(200), default="deterministic-fallback")
+    prompt_version: Mapped[str] = mapped_column(String(100), default="legacy-prompt")
     fit_score: Mapped[int] = mapped_column(Integer, index=True)
     score_breakdown: Mapped[dict[str, int]] = mapped_column(JSON)
+    score_details: Mapped[dict[str, object]] = mapped_column(JSON, default=dict)
     strengths: Mapped[list[str]] = mapped_column(JSON, default=list)
     gaps: Mapped[list[str]] = mapped_column(JSON, default=list)
     evidence: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -80,7 +93,7 @@ class JobAnalysis(TimestampMixin, Base):
     summary: Mapped[str] = mapped_column(Text)
     model_used: Mapped[str] = mapped_column(String(100), default="deterministic-fallback")
 
-    job: Mapped[Job] = relationship(back_populates="analysis")
+    job: Mapped[Job] = relationship(back_populates="analyses")
 
 
 class ApplicationEvent(TimestampMixin, Base):

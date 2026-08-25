@@ -10,6 +10,7 @@ from app.database.session import get_db
 from app.ingestion.text_extractor import extract_job_from_text
 from app.ingestion.url_fetcher import JobPageFetchError, fetch_job_from_url
 from app.schemas import (
+    AnalysisRead,
     ApplicationEventCreate,
     ApplicationEventRead,
     ApplicationStatus,
@@ -39,8 +40,11 @@ from app.services.job_service import (
     get_daily_digest,
     get_dashboard,
     get_job,
+    list_analyses,
     list_application_events,
     list_jobs,
+    reanalyze_job,
+    to_analysis_read,
     to_job_read,
     update_status,
 )
@@ -122,6 +126,26 @@ def read_jobs(
 def read_job(job_id: int, db: Db) -> JobRead:
     try:
         return to_job_read(get_job(db, job_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/jobs/{job_id}/reanalyze",
+    response_model=AnalysisRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def reanalyze(job_id: int, db: Db, settings: AppSettings) -> AnalysisRead:
+    try:
+        return to_analysis_read(reanalyze_job(db, job_id, settings))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/jobs/{job_id}/analyses", response_model=list[AnalysisRead])
+def read_analysis_history(job_id: int, db: Db) -> list[AnalysisRead]:
+    try:
+        return [to_analysis_read(analysis) for analysis in list_analyses(db, job_id)]
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

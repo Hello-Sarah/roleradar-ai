@@ -102,12 +102,22 @@ class ScoreBreakdown(BaseModel):
 
 
 class AnalysisRead(BaseModel):
+    id: int
+    job_id: int
+    profile_id: int
+    created_at: datetime
+    scoring_version: str
+    profile_version: str
+    rubric_version: str
+    model_version: str
+    prompt_version: str
     fit_score: int = Field(ge=0, le=100)
-    score_breakdown: ScoreBreakdown
+    score_breakdown: dict[str, int]
+    score_details: dict[str, object]
     strengths: list[str]
     gaps: list[str]
     evidence: list[str]
-    recommendation: Recommendation
+    recommendation: str
     summary: str
     model_used: str
 
