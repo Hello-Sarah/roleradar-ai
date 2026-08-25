@@ -1,7 +1,10 @@
 from datetime import date, datetime
 from enum import StrEnum
+from typing import Literal, TypeAlias
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, HttpUrl, model_validator
+
+Locale: TypeAlias = Literal["en", "zh-Hans"]
 
 
 class RoleCategory(StrEnum):
