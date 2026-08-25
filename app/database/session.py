@@ -25,16 +25,93 @@ engine = create_engine(
 )
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
 
-_LEGACY_TABLES = frozenset(
-    {
-        "candidate_profiles",
-        "jobs",
-        "job_classifications",
-        "job_analyses",
-        "application_events",
-        "cv_documents",
-    }
-)
+_LEGACY_SCHEMA = {
+    "candidate_profiles": {
+        "id": ("INTEGER", None, False),
+        "name": ("VARCHAR", 200, False),
+        "target_roles": ("JSON", None, False),
+        "preferred_locations": ("JSON", None, False),
+        "future_locations": ("JSON", None, False),
+        "domain_strengths": ("JSON", None, False),
+        "technical_strengths": ("JSON", None, False),
+        "development_gaps": ("JSON", None, False),
+        "created_at": ("DATETIME", None, False),
+        "updated_at": ("DATETIME", None, False),
+    },
+    "jobs": {
+        "id": ("INTEGER", None, False),
+        "fingerprint": ("VARCHAR", 64, False),
+        "company": ("VARCHAR", 200, False),
+        "title": ("VARCHAR", 300, False),
+        "location": ("VARCHAR", 200, False),
+        "url": ("TEXT", None, True),
+        "posting_date": ("DATE", None, True),
+        "description": ("TEXT", None, False),
+        "source": ("VARCHAR", 100, False),
+        "status": ("VARCHAR", 30, False),
+        "created_at": ("DATETIME", None, False),
+        "updated_at": ("DATETIME", None, False),
+    },
+    "job_classifications": {
+        "id": ("INTEGER", None, False),
+        "job_id": ("INTEGER", None, False),
+        "category": ("VARCHAR", 100, False),
+        "confidence": ("FLOAT", None, False),
+        "evidence": ("JSON", None, False),
+        "created_at": ("DATETIME", None, False),
+        "updated_at": ("DATETIME", None, False),
+    },
+    "job_analyses": {
+        "id": ("INTEGER", None, False),
+        "job_id": ("INTEGER", None, False),
+        "profile_id": ("INTEGER", None, False),
+        "fit_score": ("INTEGER", None, False),
+        "score_breakdown": ("JSON", None, False),
+        "strengths": ("JSON", None, False),
+        "gaps": ("JSON", None, False),
+        "evidence": ("JSON", None, False),
+        "recommendation": ("VARCHAR", 50, False),
+        "summary": ("TEXT", None, False),
+        "model_used": ("VARCHAR", 100, False),
+        "created_at": ("DATETIME", None, False),
+        "updated_at": ("DATETIME", None, False),
+    },
+    "application_events": {
+        "id": ("INTEGER", None, False),
+        "job_id": ("INTEGER", None, False),
+        "status": ("VARCHAR", 30, False),
+        "occurred_at": ("DATETIME", None, False),
+        "channel": ("VARCHAR", 100, True),
+        "notes": ("TEXT", None, True),
+        "next_follow_up_date": ("DATE", None, True),
+        "created_at": ("DATETIME", None, False),
+        "updated_at": ("DATETIME", None, False),
+    },
+    "cv_documents": {
+        "id": ("INTEGER", None, False),
+        "file_path": ("TEXT", None, False),
+        "file_name": ("VARCHAR", 500, False),
+        "file_type": ("VARCHAR", 20, False),
+        "fingerprint": ("VARCHAR", 64, False),
+        "modified_at": ("DATETIME", None, False),
+        "extracted_text": ("TEXT", None, False),
+        "active": ("BOOLEAN", None, False),
+        "created_at": ("DATETIME", None, False),
+        "updated_at": ("DATETIME", None, False),
+    },
+}
+
+_LEGACY_FOREIGN_KEYS = {
+    "candidate_profiles": set(),
+    "jobs": set(),
+    "job_classifications": {(("job_id",), "jobs", ("id",))},
+    "job_analyses": {
+        (("job_id",), "jobs", ("id",)),
+        (("profile_id",), "candidate_profiles", ("id",)),
+    },
+    "application_events": {(("job_id",), "jobs", ("id",))},
+    "cv_documents": set(),
+}
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -59,6 +136,51 @@ def _existing_table_names(database_url: str) -> set[str]:
         database_engine.dispose()
 
 
+def _matches_legacy_column(
+    column: dict[str, object], expected: tuple[str, int | None, bool]
+) -> bool:
+    expected_type_name, expected_length, expected_nullable = expected
+    column_type = column["type"]
+    actual_type_name = column_type.__visit_name__.upper()
+    expected_type_names = (
+        {"DATETIME", "TIMESTAMP"} if expected_type_name == "DATETIME" else {expected_type_name}
+    )
+    return (
+        actual_type_name in expected_type_names
+        and getattr(column_type, "length", None) == expected_length
+        and column["nullable"] == expected_nullable
+    )
+
+
+def _is_known_legacy_schema(database_url: str, table_names: set[str]) -> bool:
+    if table_names != set(_LEGACY_SCHEMA):
+        return False
+
+    database_engine = create_engine(database_url, connect_args=_connect_args(database_url))
+    try:
+        inspector = inspect(database_engine)
+        for table_name, expected_columns in _LEGACY_SCHEMA.items():
+            columns = {column["name"]: column for column in inspector.get_columns(table_name)}
+            if set(columns) != set(expected_columns):
+                return False
+            for column_name, expected_column in expected_columns.items():
+                if not _matches_legacy_column(columns[column_name], expected_column):
+                    return False
+            foreign_keys = {
+                (
+                    tuple(foreign_key["constrained_columns"]),
+                    foreign_key["referred_table"],
+                    tuple(foreign_key["referred_columns"]),
+                )
+                for foreign_key in inspector.get_foreign_keys(table_name)
+            }
+            if foreign_keys != _LEGACY_FOREIGN_KEYS[table_name]:
+                return False
+    finally:
+        database_engine.dispose()
+    return True
+
+
 def upgrade_database(database_url: str | None = None) -> None:
     """Upgrade the configured database without discarding an unversioned legacy baseline."""
     url = database_url or settings.database_url
@@ -66,7 +188,7 @@ def upgrade_database(database_url: str | None = None) -> None:
     config = _alembic_config(url)
 
     if "alembic_version" not in table_names and table_names:
-        if not table_names >= _LEGACY_TABLES:
+        if not _is_known_legacy_schema(url, table_names):
             raise RuntimeError(
                 "Refusing to migrate an unknown unversioned schema; expected the RoleRadar legacy "
                 "jobs/profile, application-events, and CV-document tables."
