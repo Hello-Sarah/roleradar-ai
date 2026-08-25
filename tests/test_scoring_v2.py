@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 
 def _scoring_types():
@@ -143,3 +144,175 @@ def test_build_heavy_ai_role_with_incidental_coordination_has_no_pmo_warning() -
     )
 
     assert "AI_TITLE_PMO_SUBSTANCE" not in {warning.code for warning in result.critical_warnings}
+
+
+def test_negated_responsibilities_do_not_award_points_or_green_flags() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Strategy Manager",
+            description=(
+                "This role does not involve AI agents, RAG, or LLM evaluation. "
+                "You will not build prototypes, deploy systems, write code, or design APIs."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score == 0
+    assert result.dimensions["build_and_ship"].score == 0
+    assert result.dimensions["technical_exposure"].score == 0
+    assert not result.matched_green_flags
+
+
+def test_affirmative_responsibilities_after_contrast_are_scored() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Solutions Engineer",
+            description=(
+                "This is not only coordination; instead, build agentic RAG prototypes, "
+                "write code, and deploy API integrations to production."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score > 0
+    assert result.dimensions["build_and_ship"].score > 0
+    assert result.dimensions["technical_exposure"].score > 0
+
+
+def test_negated_build_language_cannot_suppress_ai_title_pmo_warning() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Transformation Manager",
+            description=(
+                "You will not build prototypes, deploy to production, write code, design "
+                "architecture, experiment, evaluate, or work hands-on with AI agents, RAG, "
+                "or LLMs. Responsibilities are coordination, status tracking, reporting, "
+                "steering committee governance, vendor management, documentation, requirement "
+                "gathering, and PMO."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    warning = next(
+        item for item in result.critical_warnings if item.code == "AI_TITLE_PMO_SUBSTANCE"
+    )
+    assert warning.evidence_ids[0] == "jd-title"
+    assert set(warning.evidence_ids[1:]) == {
+        item_id for flag in result.matched_red_flags for item_id in flag.evidence_ids
+    }
+    assert result.dimensions["ai_depth"].score == 0
+    assert result.dimensions["build_and_ship"].score == 0
+
+
+def test_workflow_orchestration_green_flag_contributes_to_ai_depth() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="Platform Engineer",
+            description="Own workflow orchestration for production customer automation systems.",
+        ),
+        ProfileEvidence(),
+    )
+
+    flag = next(
+        flag for flag in result.matched_green_flags if flag.code == "WORKFLOW_ORCHESTRATION"
+    )
+    assert result.dimensions["ai_depth"].score > 0
+    assert set(flag.evidence_ids) <= set(result.dimensions["ai_depth"].evidence_ids)
+
+
+def test_explicit_evidence_catalog_still_materializes_title_warning_evidence() -> None:
+    from app.scoring.v2 import EvidenceItem, JobEvidence, ProfileEvidence, score_job_v2
+
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Programme Lead",
+            evidence=[
+                EvidenceItem(
+                    id="jd-responsibilities",
+                    text="PMO coordination, reporting, governance, and vendor management.",
+                )
+            ],
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.evidence[0].id == "jd-title"
+    assert result.critical_warnings[0].evidence_ids == ["jd-title", "jd-responsibilities"]
+
+
+def _valid_result_payload() -> dict:
+    from app.scoring.v2 import JobEvidence, ProfileEvidence, score_job_v2
+
+    return score_job_v2(
+        JobEvidence(
+            title="Applied AI Engineer",
+            description="Build agentic RAG prototypes and deploy API integrations to production.",
+        ),
+        ProfileEvidence(),
+    ).model_dump(mode="json")
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda payload: payload["dimensions"].pop("ownership"),
+        lambda payload: payload.update(scoring_version="career-fit-v999"),
+        lambda payload: payload["dimensions"]["ai_depth"].update(max_score=999),
+        lambda payload: payload.update(total_score=payload["total_score"] + 1),
+        lambda payload: payload.update(recommendation_band="Must Apply"),
+        lambda payload: payload["evidence"].append(payload["evidence"][0].copy()),
+        lambda payload: payload["matched_green_flags"][0].update(
+            evidence_ids=["jd-not-in-catalog"]
+        ),
+        lambda payload: payload["dimensions"]["ai_depth"].update(
+            evidence_ids=["jd-not-in-catalog"]
+        ),
+    ],
+    ids=[
+        "missing-dimension",
+        "wrong-version",
+        "wrong-maximum",
+        "wrong-total",
+        "wrong-band",
+        "duplicate-catalog-id",
+        "flag-non-catalog-id",
+        "dimension-non-catalog-id",
+    ],
+)
+def test_career_fit_contract_rejects_invalid_public_results(mutate) -> None:
+    from app.scoring.v2 import CareerFitV2
+
+    payload = _valid_result_payload()
+    mutate(payload)
+
+    with pytest.raises(ValidationError):
+        CareerFitV2.model_validate(payload)
+
+
+def test_career_fit_contract_rejects_duplicate_and_non_jd_reference_ids() -> None:
+    from app.scoring.v2 import CareerFitV2
+
+    duplicate = _valid_result_payload()
+    duplicate["dimensions"]["ai_depth"]["evidence_ids"] = ["jd-001", "jd-001"]
+    with pytest.raises(ValidationError):
+        CareerFitV2.model_validate(duplicate)
+
+    non_jd = _valid_result_payload()
+    non_jd["evidence"][0]["id"] = "external-001"
+    with pytest.raises(ValidationError):
+        CareerFitV2.model_validate(non_jd)

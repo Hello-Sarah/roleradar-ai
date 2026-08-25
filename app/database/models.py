@@ -1,6 +1,17 @@
 from datetime import date, datetime
 
-from sqlalchemy import JSON, Date, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import (
+    JSON,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.session import Base
@@ -24,6 +35,34 @@ class CandidateProfile(TimestampMixin, Base):
     domain_strengths: Mapped[list[str]] = mapped_column(JSON, default=list)
     technical_strengths: Mapped[list[str]] = mapped_column(JSON, default=list)
     development_gaps: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    versions: Mapped[list["CandidateProfileVersion"]] = relationship(
+        back_populates="profile", order_by="CandidateProfileVersion.id.desc()"
+    )
+
+
+class CandidateProfileVersion(Base):
+    __tablename__ = "candidate_profile_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("candidate_profiles.id"), index=True)
+    version: Mapped[str] = mapped_column(String(100))
+    name: Mapped[str] = mapped_column(String(200))
+    target_roles: Mapped[list[str]] = mapped_column(JSON, default=list)
+    preferred_locations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    future_locations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    domain_strengths: Mapped[list[str]] = mapped_column(JSON, default=list)
+    technical_strengths: Mapped[list[str]] = mapped_column(JSON, default=list)
+    development_gaps: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    profile: Mapped[CandidateProfile] = relationship(back_populates="versions")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id", "version", name="uq_candidate_profile_versions_profile_version"
+        ),
+    )
 
 
 class Job(TimestampMixin, Base):
@@ -78,6 +117,9 @@ class JobAnalysis(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
     profile_id: Mapped[int] = mapped_column(ForeignKey("candidate_profiles.id"))
+    profile_version_id: Mapped[int] = mapped_column(
+        ForeignKey("candidate_profile_versions.id"), index=True
+    )
     scoring_version: Mapped[str] = mapped_column(String(50), default="legacy-v1")
     profile_version: Mapped[str] = mapped_column(String(100), default="legacy-profile")
     rubric_version: Mapped[str] = mapped_column(String(50), default="legacy-v1")
@@ -94,6 +136,7 @@ class JobAnalysis(TimestampMixin, Base):
     model_used: Mapped[str] = mapped_column(String(100), default="deterministic-fallback")
 
     job: Mapped[Job] = relationship(back_populates="analyses")
+    profile_snapshot: Mapped[CandidateProfileVersion] = relationship()
 
 
 class ApplicationEvent(TimestampMixin, Base):

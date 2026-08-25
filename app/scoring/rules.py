@@ -25,13 +25,14 @@ class Rule:
 DIMENSION_RULES: dict[str, tuple[Rule, ...]] = {
     "ai_depth": (
         Rule("AI_AGENTIC", 4, ("agent", "agents", "agentic", "tool calling")),
+        Rule("AI_WORKFLOW_ORCHESTRATION", 4, ("workflow orchestration",)),
         Rule("AI_RAG", 4, ("rag", "retrieval augmented generation")),
         Rule("AI_LLM", 4, ("llm", "llms", "large language model", "generative ai")),
         Rule("AI_EVALUATION", 4, ("evaluation", "evaluate", "evals")),
         Rule("AI_ARCHITECTURE", 4, ("ai architecture", "ai platform", "model architecture")),
     ),
     "ownership": (
-        Rule("LEADERSHIP_TITLE", 4, ("lead", "head", "director")),
+        Rule("LEADERSHIP_TITLE", 4, ("lead", "head", "director", "manager")),
         Rule("OWNER", 8, ("own", "owner", "ownership")),
         Rule("DECISION_MAKER", 4, ("decision maker", "make decisions", "accountable")),
         Rule("END_TO_END", 8, ("end to end", "end-to-end", "0 to 1", "0-to-1", "0→1")),

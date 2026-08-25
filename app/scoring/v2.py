@@ -17,8 +17,8 @@ from app.scoring.rules import (
 
 
 class EvidenceItem(BaseModel, frozen=True):
-    id: str
-    text: str
+    id: str = Field(pattern=r"^jd-[A-Za-z0-9][A-Za-z0-9._:-]*$")
+    text: str = Field(min_length=1)
 
 
 class JobEvidence(BaseModel):
@@ -29,6 +29,13 @@ class JobEvidence(BaseModel):
     @model_validator(mode="after")
     def populate_evidence(self) -> "JobEvidence":
         if self.evidence:
+            if len({item.id for item in self.evidence}) != len(self.evidence):
+                raise ValueError("JD evidence IDs must be unique")
+            title_evidence = next((item for item in self.evidence if item.id == "jd-title"), None)
+            if title_evidence is None:
+                self.evidence.insert(0, EvidenceItem(id="jd-title", text=self.title.strip()))
+            elif title_evidence.text != self.title.strip():
+                raise ValueError("jd-title evidence must exactly match the job title")
             return self
         snippets = [part.strip() for part in re.split(r"(?<=[.!?])\s+|[\r\n]+", self.description)]
         self.evidence = [
@@ -53,6 +60,12 @@ class Deduction(BaseModel, frozen=True):
     points: int = Field(gt=0)
     evidence_ids: list[str] = Field(min_length=1)
 
+    @model_validator(mode="after")
+    def validate_unique_evidence(self) -> "Deduction":
+        if len(set(self.evidence_ids)) != len(self.evidence_ids):
+            raise ValueError("deduction evidence IDs must be unique")
+        return self
+
 
 class DimensionScore(BaseModel, frozen=True):
     score: int = Field(ge=0)
@@ -67,12 +80,20 @@ class DimensionScore(BaseModel, frozen=True):
             raise ValueError("dimension score exceeds its maximum")
         if self.score and not self.evidence_ids:
             raise ValueError("a non-zero dimension must reference JD evidence")
+        if len(set(self.evidence_ids)) != len(self.evidence_ids):
+            raise ValueError("dimension evidence IDs must be unique")
         return self
 
 
 class EvidenceFlag(BaseModel, frozen=True):
     code: str
     evidence_ids: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_evidence(self) -> "EvidenceFlag":
+        if len(set(self.evidence_ids)) != len(self.evidence_ids):
+            raise ValueError("flag evidence IDs must be unique")
+        return self
 
 
 class CriticalWarning(EvidenceFlag):
@@ -93,11 +114,42 @@ class CareerFitV2(BaseModel, frozen=True):
 
     @model_validator(mode="after")
     def validate_total_and_dimensions(self) -> "CareerFitV2":
+        if self.scoring_version != SCORING_VERSION:
+            raise ValueError(f"scoring version must be {SCORING_VERSION}")
         if set(self.dimensions) != set(DIMENSION_MAXIMA):
             raise ValueError("Career Fit V2 requires exactly six dimensions")
+        for name, expected_maximum in DIMENSION_MAXIMA.items():
+            if self.dimensions[name].max_score != expected_maximum:
+                raise ValueError(f"{name} maximum must be {expected_maximum}")
         derived_total = sum(dimension.score for dimension in self.dimensions.values())
         if self.total_score != derived_total:
             raise ValueError("total score must be derived only from dimensions")
+        if self.recommendation_band != recommendation_band(self.total_score):
+            raise ValueError("recommendation band must be derived from total score")
+        catalog_ids = [item.id for item in self.evidence]
+        if len(set(catalog_ids)) != len(catalog_ids):
+            raise ValueError("JD evidence catalog IDs must be unique")
+        known_ids = set(catalog_ids)
+        referenced_ids = {
+            item_id for dimension in self.dimensions.values() for item_id in dimension.evidence_ids
+        }
+        referenced_ids.update(
+            item_id
+            for dimension in self.dimensions.values()
+            for deduction in dimension.deductions
+            for item_id in deduction.evidence_ids
+        )
+        referenced_ids.update(
+            item_id
+            for flag in [
+                *self.matched_green_flags,
+                *self.matched_red_flags,
+                *self.critical_warnings,
+            ]
+            for item_id in flag.evidence_ids
+        )
+        if not referenced_ids <= known_ids:
+            raise ValueError("all references must belong to the JD evidence catalog")
         return self
 
     @property
@@ -131,17 +183,54 @@ def _contains(text: str, phrase: str) -> bool:
     return bool(re.search(rf"(?<!\w){re.escape(candidate)}(?!\w)", normalized))
 
 
+_NEGATION_PATTERN = re.compile(
+    r"\b(?:no|not|never|without|cannot|can't|won't|isn't|aren't|doesn't|don't|"
+    r"does\s+not|do\s+not|will\s+not|is\s+not|are\s+not|little|lack|lacks|lacking)\b"
+)
+_NON_NEGATING_PATTERN = re.compile(r"\bnot\s+(?:only|just)\b")
+_SCOPE_RESET_PATTERN = re.compile(r"(?:[;]|\b(?:but|however|instead|rather)\b)")
+_POST_NEGATION_PATTERN = re.compile(
+    r"^\s*(?:is|are|was|were|will be)?\s*(?:not|never)\b|"
+    r"^\s*(?:isn't|aren't|wasn't|weren't)\b|"
+    r"^\s*(?:is|are)?\s*(?:excluded|out of scope)\b"
+)
+
+
+def _positive_occurrences(text: str, phrase: str) -> list[re.Match[str]]:
+    normalized = text.casefold().replace("→", " to ").replace("’", "'")
+    candidate = phrase.casefold().replace("→", " to ")
+    matches = list(re.finditer(rf"(?<!\w){re.escape(candidate)}(?!\w)", normalized))
+    positive: list[re.Match[str]] = []
+    for match in matches:
+        prefix = normalized[: match.start()]
+        resets = list(_SCOPE_RESET_PATTERN.finditer(prefix))
+        scope_prefix = prefix[resets[-1].end() :] if resets else prefix
+        scope_prefix = _NON_NEGATING_PATTERN.sub("", scope_prefix)
+        suffix = normalized[match.end() :]
+        suffix_boundary = _SCOPE_RESET_PATTERN.search(suffix)
+        scope_suffix = suffix[: suffix_boundary.start()] if suffix_boundary else suffix
+        if _NEGATION_PATTERN.search(scope_prefix) or _POST_NEGATION_PATTERN.search(scope_suffix):
+            continue
+        positive.append(match)
+    return positive
+
+
 def _matching_ids(evidence: Iterable[EvidenceItem], phrases: Iterable[str]) -> list[str]:
+    phrase_list = tuple(phrases)
     return list(
         dict.fromkeys(
-            item.id for item in evidence if any(_contains(item.text, phrase) for phrase in phrases)
+            item.id
+            for item in evidence
+            if any(_positive_occurrences(item.text, phrase) for phrase in phrase_list)
         )
     )
 
 
 def _match_count(evidence: Iterable[EvidenceItem], phrases: Iterable[str]) -> int:
     phrase_list = tuple(phrases)
-    return sum(1 for item in evidence for phrase in phrase_list if _contains(item.text, phrase))
+    return sum(
+        len(_positive_occurrences(item.text, phrase)) for item in evidence for phrase in phrase_list
+    )
 
 
 def _flags(
@@ -214,7 +303,12 @@ def score_job_v2(job: JobEvidence, profile: ProfileEvidence) -> CareerFitV2:
             CriticalWarning(
                 code="AI_TITLE_PMO_SUBSTANCE",
                 evidence_ids=list(
-                    dict.fromkeys(item_id for flag in red_flags for item_id in flag.evidence_ids)
+                    dict.fromkeys(
+                        [
+                            "jd-title",
+                            *(item_id for flag in red_flags for item_id in flag.evidence_ids),
+                        ]
+                    )
                 ),
                 message=(
                     "The AI title is not supported by build-heavy responsibilities; "

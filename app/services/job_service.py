@@ -1,5 +1,3 @@
-import hashlib
-import json
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -23,6 +21,7 @@ from app.schemas import (
     ApplicationEventCreate,
     ApplicationEventRead,
     ApplicationStatus,
+    CandidateProfileVersionRead,
     ClassificationRead,
     DashboardRead,
     DigestRead,
@@ -32,7 +31,11 @@ from app.schemas import (
 )
 from app.scoring.rules import PROMPT_VERSION, SCORING_VERSION
 from app.scoring.v2 import JobEvidence, ProfileEvidence, score_job_v2
-from app.services.profile_service import get_or_create_profile, to_profile_read
+from app.services.profile_service import (
+    get_or_create_profile,
+    get_or_create_profile_version,
+    to_profile_read,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +49,7 @@ def _job_query():
         select(Job)
         .options(
             selectinload(Job.classification),
-            selectinload(Job.analyses),
+            selectinload(Job.analyses).selectinload(JobAnalysis.profile_snapshot),
             selectinload(Job.application_events),
         )
         .execution_options(populate_existing=True)
@@ -58,6 +61,8 @@ def to_analysis_read(analysis: JobAnalysis) -> AnalysisRead:
         id=analysis.id,
         job_id=analysis.job_id,
         profile_id=analysis.profile_id,
+        profile_version_id=analysis.profile_version_id,
+        profile_snapshot=CandidateProfileVersionRead.model_validate(analysis.profile_snapshot),
         created_at=analysis.created_at,
         scoring_version=analysis.scoring_version,
         profile_version=analysis.profile_version,
@@ -107,23 +112,9 @@ def to_job_read(job: Job) -> JobRead:
     )
 
 
-def _profile_version(profile: CandidateProfile) -> str:
-    snapshot = {
-        "name": profile.name,
-        "target_roles": profile.target_roles,
-        "preferred_locations": profile.preferred_locations,
-        "future_locations": profile.future_locations,
-        "domain_strengths": profile.domain_strengths,
-        "technical_strengths": profile.technical_strengths,
-        "development_gaps": profile.development_gaps,
-    }
-    digest = hashlib.sha256(
-        json.dumps(snapshot, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    ).hexdigest()
-    return f"profile-sha256:{digest}"
-
-
-def _build_analysis(job: Job, profile: CandidateProfile, settings: Settings) -> JobAnalysis:
+def _build_analysis(
+    db: Session, job: Job, profile: CandidateProfile, settings: Settings
+) -> JobAnalysis:
     score = score_job_v2(
         JobEvidence(title=job.title, description=job.description),
         ProfileEvidence(
@@ -159,10 +150,12 @@ def _build_analysis(job: Job, profile: CandidateProfile, settings: Settings) -> 
         result=score,
         settings=settings,
     )
+    profile_snapshot = get_or_create_profile_version(db, profile)
     return JobAnalysis(
         profile_id=profile.id,
+        profile_snapshot=profile_snapshot,
         scoring_version=SCORING_VERSION,
-        profile_version=_profile_version(profile),
+        profile_version=profile_snapshot.version,
         rubric_version=SCORING_VERSION,
         model_version=model_used,
         prompt_version=PROMPT_VERSION,
@@ -193,7 +186,7 @@ def create_and_analyze_job(db: Session, payload: JobCreate, settings: Settings) 
         status=ApplicationStatus.NEW.value,
     )
     job.classification = JobClassification(**classification.model_dump(mode="json"))
-    job.analyses.append(_build_analysis(job, profile, settings))
+    job.analyses.append(_build_analysis(db, job, profile, settings))
     db.add(job)
     try:
         db.commit()
@@ -245,7 +238,7 @@ def list_analyses(db: Session, job_id: int) -> list[JobAnalysis]:
 def reanalyze_job(db: Session, job_id: int, settings: Settings) -> JobAnalysis:
     job = get_job(db, job_id)
     profile = get_or_create_profile(db)
-    analysis = _build_analysis(job, profile, settings)
+    analysis = _build_analysis(db, job, profile, settings)
     job.analyses.append(analysis)
     db.commit()
     db.refresh(analysis)

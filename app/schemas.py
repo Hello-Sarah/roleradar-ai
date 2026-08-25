@@ -58,6 +58,15 @@ class CandidateProfileRead(CandidateProfileBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class CandidateProfileVersionRead(CandidateProfileBase):
+    id: int
+    profile_id: int
+    version: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class JobCreate(BaseModel):
     company: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=300)
@@ -105,6 +114,8 @@ class AnalysisRead(BaseModel):
     id: int
     job_id: int
     profile_id: int
+    profile_version_id: int
+    profile_snapshot: CandidateProfileVersionRead
     created_at: datetime
     scoring_version: str
     profile_version: str

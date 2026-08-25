@@ -16,6 +16,7 @@ from app.schemas import (
     ApplicationStatus,
     CandidateProfileCreate,
     CandidateProfileRead,
+    CandidateProfileVersionRead,
     CVDocumentRead,
     CVLibraryScanRead,
     DashboardRead,
@@ -48,7 +49,7 @@ from app.services.job_service import (
     to_job_read,
     update_status,
 )
-from app.services.profile_service import get_or_create_profile, upsert_profile
+from app.services.profile_service import get_or_create_profile, get_profile_version, upsert_profile
 
 router = APIRouter(prefix="/api/v1")
 Db = Annotated[Session, Depends(get_db)]
@@ -68,6 +69,14 @@ def read_profile(db: Db) -> CandidateProfileRead:
 @router.put("/profile", response_model=CandidateProfileRead)
 def write_profile(payload: CandidateProfileCreate, db: Db) -> CandidateProfileRead:
     return CandidateProfileRead.model_validate(upsert_profile(db, payload))
+
+
+@router.get("/profile/versions/{version_id}", response_model=CandidateProfileVersionRead)
+def read_profile_version(version_id: int, db: Db) -> CandidateProfileVersionRead:
+    try:
+        return CandidateProfileVersionRead.model_validate(get_profile_version(db, version_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 @router.post("/jobs", response_model=JobRead, status_code=status.HTTP_201_CREATED)

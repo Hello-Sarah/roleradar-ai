@@ -31,6 +31,8 @@ def test_explicit_reanalysis_appends_provenance_and_preserves_history(
     assert first["scoring_version"] == "career-fit-v2"
     assert first["rubric_version"] == "career-fit-v2"
     assert first["profile_version"]
+    assert first["profile_version_id"]
+    assert first["profile_snapshot"]["version"] == first["profile_version"]
     assert first["model_version"]
     assert first["prompt_version"]
 
@@ -46,18 +48,27 @@ def test_explicit_reanalysis_appends_provenance_and_preserves_history(
     second = reanalyzed_response.json()
     assert second["id"] != first["id"]
     assert second["profile_version"] != first["profile_version"]
+    assert second["profile_version_id"] != first["profile_version_id"]
 
     history_response = client.get(f"/api/v1/jobs/{created_response.json()['id']}/analyses")
     assert history_response.status_code == 200
     history = history_response.json()
     assert [item["id"] for item in history] == [second["id"], first["id"]]
     assert history[1] == first
+    assert history[0]["profile_snapshot"]["technical_strengths"][-1] == "RAG"
+    assert "RAG" not in history[1]["profile_snapshot"]["technical_strengths"]
+    first_snapshot = client.get(f"/api/v1/profile/versions/{first['profile_version_id']}")
+    second_snapshot = client.get(f"/api/v1/profile/versions/{second['profile_version_id']}")
+    assert first_snapshot.status_code == second_snapshot.status_code == 200
+    assert first_snapshot.json() == history[1]["profile_snapshot"]
+    assert second_snapshot.json() == history[0]["profile_snapshot"]
     assert client.get(f"/api/v1/jobs/{created_response.json()['id']}").json()["analysis"] == second
 
 
 def test_reanalysis_and_history_return_not_found(client: TestClient) -> None:
     assert client.post("/api/v1/jobs/999/reanalyze").status_code == 404
     assert client.get("/api/v1/jobs/999/analyses").status_code == 404
+    assert client.get("/api/v1/profile/versions/999").status_code == 404
 
 
 def test_model_explanation_cannot_modify_saved_score(client: TestClient, monkeypatch) -> None:
@@ -128,12 +139,14 @@ def test_v2_migration_preserves_legacy_analysis_and_removes_job_uniqueness(tmp_p
 
     engine = create_engine(url)
     try:
+        assert "candidate_profile_versions" in inspect(engine).get_table_names()
         indexes = {index["name"]: index for index in inspect(engine).get_indexes("job_analyses")}
         assert indexes["ix_job_analyses_job_id"]["unique"] == 0
         with engine.connect() as connection:
             legacy = connection.execute(
                 text(
-                    "SELECT fit_score, scoring_version, rubric_version, model_version "
+                    "SELECT fit_score, scoring_version, rubric_version, model_version, "
+                    "profile_version_id "
                     "FROM job_analyses WHERE id = 1"
                 )
             ).one()
@@ -142,6 +155,15 @@ def test_v2_migration_preserves_legacy_analysis_and_removes_job_uniqueness(tmp_p
                 "legacy-v1",
                 "legacy-v1",
                 "deterministic-fallback",
+                1,
             )
+            snapshot = connection.execute(
+                text(
+                    "SELECT profile_id, version, name FROM candidate_profile_versions "
+                    "WHERE id = :snapshot_id"
+                ),
+                {"snapshot_id": legacy.profile_version_id},
+            ).one()
+            assert tuple(snapshot) == (1, "legacy-profile", "Legacy")
     finally:
         engine.dispose()
