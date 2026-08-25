@@ -113,6 +113,43 @@ _LEGACY_FOREIGN_KEYS = {
     "cv_documents": set(),
 }
 
+_LEGACY_PRIMARY_KEYS = {table_name: ("id",) for table_name in _LEGACY_SCHEMA}
+
+_LEGACY_UNIQUE_CONSTRAINTS = {
+    "candidate_profiles": set(),
+    "jobs": set(),
+    "job_classifications": set(),
+    "job_analyses": set(),
+    "application_events": set(),
+    "cv_documents": {("file_path",)},
+}
+
+_LEGACY_INDEXES = {
+    "candidate_profiles": set(),
+    "jobs": {
+        ("ix_jobs_company", ("company",), False),
+        ("ix_jobs_fingerprint", ("fingerprint",), True),
+        ("ix_jobs_status", ("status",), False),
+        ("ix_jobs_title", ("title",), False),
+    },
+    "job_classifications": {("ix_job_classifications_job_id", ("job_id",), True)},
+    "job_analyses": {
+        ("ix_job_analyses_fit_score", ("fit_score",), False),
+        ("ix_job_analyses_job_id", ("job_id",), True),
+    },
+    "application_events": {
+        ("ix_application_events_job_id", ("job_id",), False),
+        ("ix_application_events_next_follow_up_date", ("next_follow_up_date",), False),
+        ("ix_application_events_occurred_at", ("occurred_at",), False),
+        ("ix_application_events_status", ("status",), False),
+    },
+    "cv_documents": {
+        ("ix_cv_documents_active", ("active",), False),
+        ("ix_cv_documents_file_name", ("file_name",), False),
+        ("ix_cv_documents_fingerprint", ("fingerprint",), False),
+    },
+}
+
 
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
@@ -175,6 +212,23 @@ def _is_known_legacy_schema(database_url: str, table_names: set[str]) -> bool:
                 for foreign_key in inspector.get_foreign_keys(table_name)
             }
             if foreign_keys != _LEGACY_FOREIGN_KEYS[table_name]:
+                return False
+            primary_key = tuple(
+                inspector.get_pk_constraint(table_name)["constrained_columns"] or []
+            )
+            if primary_key != _LEGACY_PRIMARY_KEYS[table_name]:
+                return False
+            unique_constraints = {
+                tuple(constraint["column_names"])
+                for constraint in inspector.get_unique_constraints(table_name)
+            }
+            if unique_constraints != _LEGACY_UNIQUE_CONSTRAINTS[table_name]:
+                return False
+            indexes = {
+                (index["name"], tuple(index["column_names"]), bool(index["unique"]))
+                for index in inspector.get_indexes(table_name)
+            }
+            if indexes != _LEGACY_INDEXES[table_name]:
                 return False
     finally:
         database_engine.dispose()

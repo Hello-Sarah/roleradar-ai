@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     String,
@@ -39,7 +40,13 @@ def test_legacy_datetime_signature_accepts_postgresql_timestamp() -> None:
 
 
 def create_legacy_schema(
-    engine, *, include_development_gaps: bool = True, include_foreign_keys: bool = True
+    engine,
+    *,
+    include_development_gaps: bool = True,
+    include_foreign_keys: bool = True,
+    include_primary_keys: bool = True,
+    include_cv_file_path_unique: bool = True,
+    include_indexes: bool = True,
 ) -> Table:
     metadata = MetaData()
 
@@ -47,7 +54,7 @@ def create_legacy_schema(
         return [ForeignKey(target)] if include_foreign_keys else []
 
     profile_columns = [
-        Column("id", Integer, primary_key=True),
+        Column("id", Integer, primary_key=include_primary_keys, nullable=False),
         Column("name", String(200), nullable=False),
         Column("target_roles", JSON, nullable=False),
         Column("preferred_locations", JSON, nullable=False),
@@ -64,11 +71,11 @@ def create_legacy_schema(
         ]
     )
     profiles = Table("candidate_profiles", metadata, *profile_columns)
-    Table(
+    jobs = Table(
         "jobs",
         metadata,
-        Column("id", Integer, primary_key=True),
-        Column("fingerprint", String(64), nullable=False, unique=True),
+        Column("id", Integer, primary_key=include_primary_keys, nullable=False),
+        Column("fingerprint", String(64), nullable=False),
         Column("company", String(200), nullable=False),
         Column("title", String(300), nullable=False),
         Column("location", String(200), nullable=False),
@@ -80,22 +87,22 @@ def create_legacy_schema(
         Column("created_at", DateTime(timezone=True), nullable=False),
         Column("updated_at", DateTime(timezone=True), nullable=False),
     )
-    Table(
+    job_classifications = Table(
         "job_classifications",
         metadata,
-        Column("id", Integer, primary_key=True),
-        Column("job_id", Integer, *foreign_key("jobs.id"), nullable=False, unique=True),
+        Column("id", Integer, primary_key=include_primary_keys, nullable=False),
+        Column("job_id", Integer, *foreign_key("jobs.id"), nullable=False),
         Column("category", String(100), nullable=False),
         Column("confidence", Float, nullable=False),
         Column("evidence", JSON, nullable=False),
         Column("created_at", DateTime(timezone=True), nullable=False),
         Column("updated_at", DateTime(timezone=True), nullable=False),
     )
-    Table(
+    job_analyses = Table(
         "job_analyses",
         metadata,
-        Column("id", Integer, primary_key=True),
-        Column("job_id", Integer, *foreign_key("jobs.id"), nullable=False, unique=True),
+        Column("id", Integer, primary_key=include_primary_keys, nullable=False),
+        Column("job_id", Integer, *foreign_key("jobs.id"), nullable=False),
         Column("profile_id", Integer, *foreign_key("candidate_profiles.id"), nullable=False),
         Column("fit_score", Integer, nullable=False),
         Column("score_breakdown", JSON, nullable=False),
@@ -108,10 +115,10 @@ def create_legacy_schema(
         Column("created_at", DateTime(timezone=True), nullable=False),
         Column("updated_at", DateTime(timezone=True), nullable=False),
     )
-    Table(
+    application_events = Table(
         "application_events",
         metadata,
-        Column("id", Integer, primary_key=True),
+        Column("id", Integer, primary_key=include_primary_keys, nullable=False),
         Column("job_id", Integer, *foreign_key("jobs.id"), nullable=False),
         Column("status", String(30), nullable=False),
         Column("occurred_at", DateTime(timezone=True), nullable=False),
@@ -121,11 +128,11 @@ def create_legacy_schema(
         Column("created_at", DateTime(timezone=True), nullable=False),
         Column("updated_at", DateTime(timezone=True), nullable=False),
     )
-    Table(
+    cv_documents = Table(
         "cv_documents",
         metadata,
-        Column("id", Integer, primary_key=True),
-        Column("file_path", Text, nullable=False, unique=True),
+        Column("id", Integer, primary_key=include_primary_keys, nullable=False),
+        Column("file_path", Text, nullable=False, unique=include_cv_file_path_unique),
         Column("file_name", String(500), nullable=False),
         Column("file_type", String(20), nullable=False),
         Column("fingerprint", String(64), nullable=False),
@@ -135,6 +142,21 @@ def create_legacy_schema(
         Column("created_at", DateTime(timezone=True), nullable=False),
         Column("updated_at", DateTime(timezone=True), nullable=False),
     )
+    if include_indexes:
+        Index("ix_jobs_company", jobs.c.company)
+        Index("ix_jobs_fingerprint", jobs.c.fingerprint, unique=True)
+        Index("ix_jobs_status", jobs.c.status)
+        Index("ix_jobs_title", jobs.c.title)
+        Index("ix_job_classifications_job_id", job_classifications.c.job_id, unique=True)
+        Index("ix_job_analyses_fit_score", job_analyses.c.fit_score)
+        Index("ix_job_analyses_job_id", job_analyses.c.job_id, unique=True)
+        Index("ix_application_events_job_id", application_events.c.job_id)
+        Index("ix_application_events_next_follow_up_date", application_events.c.next_follow_up_date)
+        Index("ix_application_events_occurred_at", application_events.c.occurred_at)
+        Index("ix_application_events_status", application_events.c.status)
+        Index("ix_cv_documents_active", cv_documents.c.active)
+        Index("ix_cv_documents_file_name", cv_documents.c.file_name)
+        Index("ix_cv_documents_fingerprint", cv_documents.c.fingerprint)
     metadata.create_all(engine)
     return profiles
 
@@ -211,6 +233,42 @@ def test_alembic_refuses_legacy_schema_with_missing_foreign_keys(tmp_path) -> No
     url = f"sqlite:///{tmp_path / 'missing-foreign-keys.db'}"
     engine = create_engine(url)
     create_legacy_schema(engine, include_foreign_keys=False)
+    engine.dispose()
+
+    with pytest.raises(RuntimeError, match="unknown unversioned schema"):
+        upgrade_database(url)
+
+    assert "workflow_runs" not in table_names(url)
+
+
+def test_alembic_refuses_legacy_schema_with_missing_id_primary_keys(tmp_path) -> None:
+    url = f"sqlite:///{tmp_path / 'missing-primary-keys.db'}"
+    engine = create_engine(url)
+    create_legacy_schema(engine, include_primary_keys=False)
+    engine.dispose()
+
+    with pytest.raises(RuntimeError, match="unknown unversioned schema"):
+        upgrade_database(url)
+
+    assert "workflow_runs" not in table_names(url)
+
+
+def test_alembic_refuses_legacy_schema_with_non_unique_cv_file_path(tmp_path) -> None:
+    url = f"sqlite:///{tmp_path / 'non-unique-cv-path.db'}"
+    engine = create_engine(url)
+    create_legacy_schema(engine, include_cv_file_path_unique=False)
+    engine.dispose()
+
+    with pytest.raises(RuntimeError, match="unknown unversioned schema"):
+        upgrade_database(url)
+
+    assert "workflow_runs" not in table_names(url)
+
+
+def test_alembic_refuses_legacy_schema_with_missing_required_indexes(tmp_path) -> None:
+    url = f"sqlite:///{tmp_path / 'missing-indexes.db'}"
+    engine = create_engine(url)
+    create_legacy_schema(engine, include_indexes=False)
     engine.dispose()
 
     with pytest.raises(RuntimeError, match="unknown unversioned schema"):
