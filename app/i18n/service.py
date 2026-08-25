@@ -43,11 +43,26 @@ _CATALOGS: dict[Locale, dict[str, str]] = {
 
 
 def _placeholder_names(message: str) -> set[str]:
-    return {
-        field_name
-        for _, field_name, _, _ in Formatter().parse(message)
-        if field_name is not None and field_name.isidentifier()
-    }
+    """Return the only supported interpolation contract: simple named placeholders."""
+    try:
+        fields = Formatter().parse(message)
+        names: set[str] = set()
+        for _, field_name, format_spec, conversion in fields:
+            if field_name is None:
+                continue
+            if (
+                not field_name
+                or not field_name.isidentifier()
+                or format_spec
+                or conversion is not None
+            ):
+                raise TranslationInterpolationError(
+                    "Translations support only simple named placeholders such as {record}"
+                )
+            names.add(field_name)
+    except ValueError as exc:
+        raise TranslationInterpolationError("Translation contains invalid format syntax") from exc
+    return names
 
 
 def assert_catalog_parity() -> None:
@@ -62,7 +77,14 @@ def assert_catalog_parity() -> None:
                 f"Catalog {locale!r} key mismatch: missing={missing}, unexpected={unexpected}"
             )
         for key, english_message in english.items():
-            if _placeholder_names(english_message) != _placeholder_names(catalog[key]):
+            try:
+                english_placeholders = _placeholder_names(english_message)
+                locale_placeholders = _placeholder_names(catalog[key])
+            except TranslationInterpolationError as exc:
+                raise CatalogParityError(
+                    f"Catalog {locale!r} has an invalid interpolation contract for key {key!r}"
+                ) from exc
+            if english_placeholders != locale_placeholders:
                 raise CatalogParityError(
                     f"Catalog {locale!r} interpolation mismatch for key {key!r}"
                 )
