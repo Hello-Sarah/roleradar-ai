@@ -108,3 +108,42 @@ class CVDocument(TimestampMixin, Base):
     modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     extracted_text: Mapped[str] = mapped_column(Text)
     active: Mapped[bool] = mapped_column(default=True, index=True)
+
+
+class WorkflowRun(TimestampMixin, Base):
+    __tablename__ = "workflow_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workflow_type: Mapped[str] = mapped_column(String(100), index=True)
+    contract_version: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    input_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    result_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    model_version: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+    steps: Mapped[list["WorkflowStep"]] = relationship(
+        back_populates="workflow_run", cascade="all, delete-orphan"
+    )
+
+
+class WorkflowStep(TimestampMixin, Base):
+    __tablename__ = "workflow_steps"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workflow_run_id: Mapped[int] = mapped_column(ForeignKey("workflow_runs.id"), index=True)
+    step_name: Mapped[str] = mapped_column(String(100), index=True)
+    version: Mapped[str] = mapped_column(String(50))
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    input_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    result_reference: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    workflow_run: Mapped[WorkflowRun] = relationship(back_populates="steps")

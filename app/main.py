@@ -6,14 +6,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
 from app.config import get_settings
-from app.database.session import create_tables
+from app.database.session import upgrade_database
 from app.logging import configure_logging
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_logging()
-    create_tables()
+    upgrade_database()
     yield
 
 
