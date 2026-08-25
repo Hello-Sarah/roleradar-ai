@@ -1,4 +1,6 @@
 import os
+from datetime import date, datetime
+from urllib.parse import quote
 
 import pandas as pd
 import streamlit as st
@@ -10,7 +12,7 @@ st.set_page_config(page_title="RoleRadar AI", page_icon="📡", layout="wide")
 client = RoleRadarClient(os.getenv("API_BASE_URL", "http://localhost:8000"))
 
 
-def render_job(job: dict) -> None:
+def render_job(job: dict, key_prefix: str) -> None:
     analysis = job.get("analysis") or {}
     classification = job.get("classification") or {}
     score = analysis.get("fit_score", "—")
@@ -25,7 +27,7 @@ def render_job(job: dict) -> None:
             st.markdown("**Strengths:** " + ", ".join(analysis.get("strengths", [])))
             st.markdown("**Gaps:** " + ", ".join(analysis.get("gaps", [])))
             if job.get("url"):
-                st.link_button("View posting", job["url"])
+                st.link_button("View posting", job["url"], key=f"{key_prefix}-link-{job['id']}")
         with right:
             st.metric("Fit score", score)
             st.write(analysis.get("recommendation", "Pending"))
@@ -33,18 +35,78 @@ def render_job(job: dict) -> None:
                 "Application status",
                 [status.value for status in ApplicationStatus],
                 index=[status.value for status in ApplicationStatus].index(job["status"]),
-                key=f"status-{job['id']}",
+                key=f"{key_prefix}-status-{job['id']}",
             )
             if selected != job["status"]:
                 client.patch(f"/api/v1/jobs/{job['id']}/status", {"status": selected})
                 st.rerun()
 
 
+def render_application_history(job: dict) -> None:
+    events = job.get("application_events") or []
+    with st.expander(f"Application records · {job['company']} — {job['title']}"):
+        with st.form(f"application-event-{job['id']}", clear_on_submit=True):
+            status_value = st.selectbox(
+                "Status",
+                [status.value for status in ApplicationStatus],
+                index=[status.value for status in ApplicationStatus].index(job["status"]),
+                key=f"event-status-{job['id']}",
+            )
+            occurred_on = st.date_input("Date", value=date.today(), key=f"event-date-{job['id']}")
+            channel = st.selectbox(
+                "Channel",
+                ["Company website", "LinkedIn", "Referral", "Recruiter", "Email", "Other"],
+                key=f"event-channel-{job['id']}",
+            )
+            notes = st.text_area(
+                "Notes", placeholder="Contact, outcome, interview stage, or next action..."
+            )
+            follow_up = st.date_input(
+                "Next follow-up date (optional)",
+                value=None,
+                key=f"event-follow-up-{job['id']}",
+            )
+            add_record = st.form_submit_button("Add application record", type="primary")
+        if add_record:
+            client.post(
+                f"/api/v1/jobs/{job['id']}/application-events",
+                {
+                    "status": status_value,
+                    "occurred_at": datetime.combine(occurred_on, datetime.min.time()).isoformat(),
+                    "channel": channel,
+                    "notes": notes or None,
+                    "next_follow_up_date": follow_up.isoformat() if follow_up else None,
+                },
+            )
+            st.rerun()
+
+        if events:
+            st.markdown("#### Timeline")
+            for event in events:
+                details = [event["status"]]
+                if event.get("channel"):
+                    details.append(event["channel"])
+                st.markdown(f"**{event['occurred_at'][:10]}** · " + " · ".join(details))
+                if event.get("notes"):
+                    st.write(event["notes"])
+                if event.get("next_follow_up_date"):
+                    st.caption(f"Follow up: {event['next_follow_up_date']}")
+        else:
+            st.caption("No application records yet.")
+
+
 st.title("📡 RoleRadar AI")
 st.caption("Your explainable career intelligence agent for Applied AI roles")
 
-dashboard_tab, add_tab, tracker_tab, profile_tab, digest_tab = st.tabs(
-    ["Dashboard", "Analyze a job", "Application tracker", "Profile", "Daily digest"]
+dashboard_tab, add_tab, tracker_tab, cv_tab, profile_tab, digest_tab = st.tabs(
+    [
+        "Dashboard",
+        "Analyze a job",
+        "Application tracker",
+        "CV Library",
+        "Profile",
+        "Daily digest",
+    ]
 )
 
 try:
@@ -60,7 +122,7 @@ try:
         if not data["high_priority_jobs"]:
             st.info("No high-priority jobs yet. Analyze a job to get started.")
         for job in data["high_priority_jobs"]:
-            render_job(job)
+            render_job(job, "dashboard-priority")
         chart_left, chart_right = st.columns(2)
         with chart_left:
             st.subheader("Skill gap trends")
@@ -74,7 +136,7 @@ try:
                 st.line_chart(trends.set_index("week")[["jobs"]])
         st.subheader("Recently added")
         for job in data["recently_added_jobs"]:
-            render_job(job)
+            render_job(job, "dashboard-recent")
 
     with add_tab:
         link_tab, text_tab = st.tabs(["Job link", "Paste job text"])
@@ -154,7 +216,7 @@ try:
         completed_job = st.session_state.get("last_analyzed_job")
         if completed_job:
             st.success(f"Analysis complete: {completed_job['analysis']['fit_score']}/100")
-            render_job(completed_job)
+            render_job(completed_job, "analysis-result")
 
     with tracker_tab:
         jobs = client.get("/api/v1/jobs")
@@ -175,9 +237,71 @@ try:
                 hide_index=True,
             )
             for job in jobs:
-                render_job(job)
+                render_job(job, "tracker")
+                render_application_history(job)
         else:
             st.info("No tracked jobs yet.")
+
+    with cv_tab:
+        st.subheader("CV Library")
+        cv_library_path = os.getenv("CV_LIBRARY_PATH", "./data/cv_library")
+        generated_cv_path = os.getenv("GENERATED_CV_PATH", "./data/generated_cvs")
+        st.caption(f"Source folder: {cv_library_path} · Generated CV folder: {generated_cv_path}")
+        st.write(
+            "Place your `.docx`, `.pdf`, or `.txt` CVs in the source folder. "
+            "Original files remain read-only and are excluded from Git."
+        )
+        if st.button("Scan CV folder", type="primary"):
+            with st.spinner("Scanning CV files..."):
+                scan_result = client.post("/api/v1/cv-library/scan", {})
+            st.success(
+                f"Found {scan_result['discovered']} CVs · added {scan_result['added']} · "
+                f"updated {scan_result['updated']} · unchanged {scan_result['unchanged']}"
+            )
+            for failure in scan_result["failed"]:
+                st.warning(failure)
+
+        cv_documents = client.get("/api/v1/cv-library")
+        if cv_documents:
+            st.dataframe(
+                [
+                    {
+                        "File": document["file_name"],
+                        "Type": document["file_type"].upper(),
+                        "Updated": document["modified_at"][:10],
+                    }
+                    for document in cv_documents
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
+            available_jobs = client.get("/api/v1/jobs")
+            if available_jobs:
+                job_options = {
+                    f"{job['company']} — {job['title']} ({job['location']})": job["id"]
+                    for job in available_jobs
+                }
+                with st.form("tailored-cv-form"):
+                    selected_job_label = st.selectbox("Target job", list(job_options))
+                    generate_cv = st.form_submit_button("Generate tailored CV", type="primary")
+                if generate_cv:
+                    with st.spinner("Building an evidence-grounded tailored CV..."):
+                        generated = client.post(
+                            f"/api/v1/jobs/{job_options[selected_job_label]}/tailored-cv", {}
+                        )
+                    st.session_state["generated_cv"] = generated
+
+                generated = st.session_state.get("generated_cv")
+                if generated:
+                    st.success(f"Generated: {generated['file_name']}")
+                    download_url = (
+                        f"{client.base_url}/api/v1/generated-cvs/{quote(generated['file_name'])}"
+                    )
+                    st.link_button("Download tailored CV", download_url, type="primary")
+            else:
+                st.info("Add and analyze a job before generating a tailored CV.")
+        else:
+            st.info("No CVs indexed yet. Add files to the source folder and scan it.")
 
     with profile_tab:
         profile = client.get("/api/v1/profile")
@@ -213,7 +337,7 @@ try:
         st.caption(f"Generated {digest['generated_at']}")
         st.subheader("High-priority new jobs")
         for job in digest["high_priority_jobs"]:
-            render_job(job)
+            render_job(job, "digest")
         st.subheader("New companies")
         st.write(", ".join(digest["new_companies"]) or "None")
         st.subheader("Emerging skills")

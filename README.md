@@ -16,6 +16,10 @@ skills are missing, and what action to take next. It is intentionally not a job 
   a deterministic fit score, evidence, strengths, gaps, and a recommendation.
 - Maintain a structured candidate profile and track jobs through New, Saved, Applied,
   Interview, Rejected, Offer, Ignored.
+- Keep an application timeline for every job with date, channel, notes, next follow-up,
+  and automatic history entries whenever the current status changes.
+- Scan a private folder of existing `.docx`, `.pdf`, and `.txt` CVs, then generate an
+  evidence-grounded Word CV for a selected job as `名字—岗位-chatgpt.docx`.
 - View high-priority and recent jobs, skill-gap trends, weekly trends, and a daily digest.
 - Use an OpenAI-compatible API for structured explanations. Without an API key, every
   workflow remains functional through a deterministic explanation fallback.
@@ -61,8 +65,16 @@ Copy `.env.example` to `.env`. Important variables:
 | `OPENAI_MODEL` | Explanation model | `gpt-4.1-mini` |
 | `AI_EXPLANATIONS_ENABLED` | Explicit explanation switch | `true` |
 | `API_BASE_URL` | Dashboard-to-API URL | `http://localhost:8000` |
+| `CV_LIBRARY_PATH` | Read-only folder containing source CVs | `./data/cv_library` |
+| `GENERATED_CV_PATH` | Folder for tailored Word CVs | `./data/generated_cvs` |
 
 Never commit `.env` or API keys.
+
+To use the CV Library, place source CVs in `CV_LIBRARY_PATH`, open the **CV Library**
+tab, scan the folder, select a saved job, and generate the tailored CV. Generation
+requires `OPENAI_API_KEY`; scanning does not. CV text is sent to the configured
+OpenAI-compatible provider only when you explicitly generate a CV. Source files and
+generated files are excluded from Git by default.
 
 ## Architecture
 
@@ -85,6 +97,9 @@ docs/           decisions and scoring documentation
 
 The request flow is `API → service → normalization/classification/scoring → optional
 LLM explanation → database`. The dashboard only uses public API contracts.
+
+Product and implementation specifications live in [`spec/`](spec/README.md), including the
+target Career Fit Score V2 and Watch List/email-ingestion behavior.
 
 ## Explainability and scoring
 

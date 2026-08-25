@@ -8,10 +8,18 @@ from sqlalchemy.orm import Session, selectinload
 from app.analysis.classifier import classify_job
 from app.analysis.explainer import explain_fit
 from app.config import Settings
-from app.database.models import CandidateProfile, Job, JobAnalysis, JobClassification
+from app.database.models import (
+    ApplicationEvent,
+    CandidateProfile,
+    Job,
+    JobAnalysis,
+    JobClassification,
+)
 from app.ingestion.normalizer import job_fingerprint, normalize_job
 from app.schemas import (
     AnalysisRead,
+    ApplicationEventCreate,
+    ApplicationEventRead,
     ApplicationStatus,
     ClassificationRead,
     DashboardRead,
@@ -32,7 +40,11 @@ class DuplicateJobError(ValueError):
 
 
 def _job_query():
-    return select(Job).options(selectinload(Job.classification), selectinload(Job.analysis))
+    return select(Job).options(
+        selectinload(Job.classification),
+        selectinload(Job.analysis),
+        selectinload(Job.application_events),
+    )
 
 
 def to_job_read(job: Job) -> JobRead:
@@ -69,6 +81,9 @@ def to_job_read(job: Job) -> JobRead:
         updated_at=job.updated_at,
         classification=classification,
         analysis=analysis,
+        application_events=[
+            ApplicationEventRead.model_validate(event) for event in job.application_events
+        ],
     )
 
 
@@ -147,9 +162,41 @@ def list_jobs(
 
 def update_status(db: Session, job_id: int, status: ApplicationStatus) -> Job:
     job = get_job(db, job_id)
+    if job.status == status.value:
+        return job
     job.status = status.value
+    job.application_events.append(
+        ApplicationEvent(
+            status=status.value,
+            occurred_at=datetime.now(UTC),
+            notes=f"Status changed to {status.value}",
+        )
+    )
     db.commit()
     return get_job(db, job_id)
+
+
+def add_application_event(
+    db: Session, job_id: int, payload: ApplicationEventCreate
+) -> ApplicationEvent:
+    job = get_job(db, job_id)
+    event = ApplicationEvent(job_id=job.id, **payload.model_dump(mode="python"))
+    job.status = payload.status.value
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def list_application_events(db: Session, job_id: int) -> list[ApplicationEvent]:
+    get_job(db, job_id)
+    return list(
+        db.scalars(
+            select(ApplicationEvent)
+            .where(ApplicationEvent.job_id == job_id)
+            .order_by(desc(ApplicationEvent.occurred_at), desc(ApplicationEvent.id))
+        ).all()
+    )
 
 
 def _gap_counts(jobs: list[Job]) -> list[tuple[str, int]]:

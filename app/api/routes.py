@@ -1,6 +1,8 @@
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
@@ -8,23 +10,36 @@ from app.database.session import get_db
 from app.ingestion.text_extractor import extract_job_from_text
 from app.ingestion.url_fetcher import JobPageFetchError, fetch_job_from_url
 from app.schemas import (
+    ApplicationEventCreate,
+    ApplicationEventRead,
     ApplicationStatus,
     CandidateProfileCreate,
     CandidateProfileRead,
+    CVDocumentRead,
+    CVLibraryScanRead,
     DashboardRead,
     DigestRead,
+    GeneratedCVRead,
     JobCreate,
     JobPasteCreate,
     JobRead,
     JobUrlCreate,
     StatusUpdate,
 )
+from app.services.cv_service import (
+    CVLibraryError,
+    generate_tailored_cv,
+    list_cv_documents,
+    scan_cv_library,
+)
 from app.services.job_service import (
     DuplicateJobError,
+    add_application_event,
     create_and_analyze_job,
     get_daily_digest,
     get_dashboard,
     get_job,
+    list_application_events,
     list_jobs,
     to_job_read,
     update_status,
@@ -119,6 +134,31 @@ def change_status(job_id: int, payload: StatusUpdate, db: Db) -> JobRead:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
+@router.post(
+    "/jobs/{job_id}/application-events",
+    response_model=ApplicationEventRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_application_event(
+    job_id: int, payload: ApplicationEventCreate, db: Db
+) -> ApplicationEventRead:
+    try:
+        return ApplicationEventRead.model_validate(add_application_event(db, job_id, payload))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/jobs/{job_id}/application-events", response_model=list[ApplicationEventRead])
+def read_application_events(job_id: int, db: Db) -> list[ApplicationEventRead]:
+    try:
+        return [
+            ApplicationEventRead.model_validate(event)
+            for event in list_application_events(db, job_id)
+        ]
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
 @router.get("/dashboard", response_model=DashboardRead)
 def dashboard(db: Db) -> DashboardRead:
     return get_dashboard(db)
@@ -127,3 +167,45 @@ def dashboard(db: Db) -> DashboardRead:
 @router.get("/digest/daily", response_model=DigestRead)
 def daily_digest(db: Db) -> DigestRead:
     return get_daily_digest(db)
+
+
+@router.get("/cv-library", response_model=list[CVDocumentRead])
+def read_cv_library(db: Db) -> list[CVDocumentRead]:
+    return [CVDocumentRead.model_validate(document) for document in list_cv_documents(db)]
+
+
+@router.post("/cv-library/scan", response_model=CVLibraryScanRead)
+def scan_cv_folder(db: Db, settings: AppSettings) -> CVLibraryScanRead:
+    try:
+        return scan_cv_library(db, settings)
+    except CVLibraryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+
+
+@router.post("/jobs/{job_id}/tailored-cv", response_model=GeneratedCVRead)
+def create_tailored_cv(job_id: int, db: Db, settings: AppSettings) -> GeneratedCVRead:
+    try:
+        return generate_tailored_cv(db, job_id, settings)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CVLibraryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+
+
+@router.get("/generated-cvs/{file_name}", response_class=FileResponse)
+def download_generated_cv(file_name: str, settings: AppSettings) -> FileResponse:
+    if Path(file_name).name != file_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file name")
+    output_directory = Path(settings.generated_cv_path).expanduser().resolve()
+    output = (output_directory / file_name).resolve()
+    if output.parent != output_directory or not output.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+    return FileResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename=file_name,
+    )

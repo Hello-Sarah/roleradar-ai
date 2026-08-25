@@ -109,6 +109,22 @@ class AnalysisRead(BaseModel):
     model_used: str
 
 
+class ApplicationEventCreate(BaseModel):
+    status: ApplicationStatus
+    occurred_at: datetime
+    channel: str | None = Field(default=None, max_length=100)
+    notes: str | None = Field(default=None, max_length=2_000)
+    next_follow_up_date: date | None = None
+
+
+class ApplicationEventRead(ApplicationEventCreate):
+    id: int
+    job_id: int
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class JobRead(BaseModel):
     id: int
     company: str
@@ -123,6 +139,7 @@ class JobRead(BaseModel):
     updated_at: datetime
     classification: ClassificationRead | None = None
     analysis: AnalysisRead | None = None
+    application_events: list[ApplicationEventRead] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -151,3 +168,34 @@ class DashboardRead(BaseModel):
     status_counts: dict[str, int]
     skill_gap_trends: list[tuple[str, int]]
     weekly_hiring_trends: list[TrendPoint]
+
+
+class CVDocumentRead(BaseModel):
+    id: int
+    file_name: str
+    file_type: str
+    fingerprint: str
+    modified_at: datetime
+    active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CVLibraryScanRead(BaseModel):
+    library_path: str
+    discovered: int
+    added: int
+    updated: int
+    unchanged: int
+    failed: list[str]
+    documents: list[CVDocumentRead]
+
+
+class GeneratedCVRead(BaseModel):
+    job_id: int
+    file_name: str
+    file_path: str
+    source_cv_ids: list[int]
+    generated_at: datetime

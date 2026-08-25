@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.config import Settings, get_settings
 from app.schemas import JobCreate
 
 JOB = {
@@ -28,9 +29,36 @@ def test_full_job_workflow(client: TestClient) -> None:
     updated = client.patch(f"/api/v1/jobs/{job['id']}/status", json={"status": "Applied"})
     assert updated.status_code == 200
     assert updated.json()["status"] == "Applied"
+    assert updated.json()["application_events"][0]["status"] == "Applied"
     dashboard = client.get("/api/v1/dashboard")
     assert dashboard.status_code == 200
     assert dashboard.json()["status_counts"]["Applied"] == 1
+
+
+def test_application_record_timeline(client: TestClient) -> None:
+    job = client.post("/api/v1/jobs", json={**JOB, "url": "https://example.com/jobs/record"}).json()
+
+    created = client.post(
+        f"/api/v1/jobs/{job['id']}/application-events",
+        json={
+            "status": "Applied",
+            "occurred_at": "2026-08-25T09:30:00+08:00",
+            "channel": "Company website",
+            "notes": "Submitted with employee referral.",
+            "next_follow_up_date": "2026-09-01",
+        },
+    )
+
+    assert created.status_code == 201
+    record = created.json()
+    assert record["status"] == "Applied"
+    assert record["channel"] == "Company website"
+    assert record["next_follow_up_date"] == "2026-09-01"
+
+    events = client.get(f"/api/v1/jobs/{job['id']}/application-events")
+    assert events.status_code == 200
+    assert events.json()[0]["notes"] == "Submitted with employee referral."
+    assert client.get(f"/api/v1/jobs/{job['id']}").json()["status"] == "Applied"
 
 
 def test_validation_rejects_short_description(client: TestClient) -> None:
@@ -103,3 +131,32 @@ def test_create_job_from_url(client: TestClient, monkeypatch) -> None:
     assert job["source"] == "job_url"
     assert job["analysis"]["fit_score"] >= 0
     assert len(client.get("/api/v1/jobs").json()) == 1
+
+
+def test_cv_library_scan_endpoint(client: TestClient, tmp_path) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    (source / "profile.txt").write_text(
+        "Jane Doe\nApplied AI Engineer\nBuilt reliable Python APIs for banking users.",
+        encoding="utf-8",
+    )
+    client.app.dependency_overrides[get_settings] = lambda: Settings(
+        cv_library_path=str(source), generated_cv_path=str(output)
+    )
+
+    response = client.post("/api/v1/cv-library/scan", json={})
+
+    assert response.status_code == 200
+    assert response.json()["added"] == 1
+    assert client.get("/api/v1/cv-library").json()[0]["file_name"] == "profile.txt"
+
+
+def test_generated_cv_download_rejects_missing_file(client: TestClient, tmp_path) -> None:
+    client.app.dependency_overrides[get_settings] = lambda: Settings(
+        generated_cv_path=str(tmp_path)
+    )
+
+    response = client.get("/api/v1/generated-cvs/missing.docx")
+
+    assert response.status_code == 404

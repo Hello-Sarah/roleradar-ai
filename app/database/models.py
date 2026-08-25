@@ -46,6 +46,11 @@ class Job(TimestampMixin, Base):
     analysis: Mapped["JobAnalysis | None"] = relationship(
         back_populates="job", cascade="all, delete-orphan", uselist=False
     )
+    application_events: Mapped[list["ApplicationEvent"]] = relationship(
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="ApplicationEvent.occurred_at.desc()",
+    )
 
 
 class JobClassification(TimestampMixin, Base):
@@ -76,3 +81,30 @@ class JobAnalysis(TimestampMixin, Base):
     model_used: Mapped[str] = mapped_column(String(100), default="deterministic-fallback")
 
     job: Mapped[Job] = relationship(back_populates="analysis")
+
+
+class ApplicationEvent(TimestampMixin, Base):
+    __tablename__ = "application_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    channel: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_follow_up_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+
+    job: Mapped[Job] = relationship(back_populates="application_events")
+
+
+class CVDocument(TimestampMixin, Base):
+    __tablename__ = "cv_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    file_path: Mapped[str] = mapped_column(Text, unique=True)
+    file_name: Mapped[str] = mapped_column(String(500), index=True)
+    file_type: Mapped[str] = mapped_column(String(20))
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    extracted_text: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(default=True, index=True)

@@ -11,4 +11,7 @@ dist/
 build/
 *.egg-info/
 .DS_Store
-
+.worktrees/
+.superpowers/
+data/cv_library/
+data/generated_cvs/
