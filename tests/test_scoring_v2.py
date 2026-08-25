@@ -260,6 +260,25 @@ def test_unrelated_prior_clause_negation_does_not_leak_into_responsibilities() -
     assert {"AGENTIC", "CUSTOMER_DEPLOYMENT"} <= {flag.code for flag in result.matched_green_flags}
 
 
+def test_generic_engineer_subject_resets_prior_clause_negation() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description=(
+                "There is little bureaucracy, and engineers will build and deploy AI agents."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score > 0
+    assert result.dimensions["build_and_ship"].score > 0
+    assert {"AGENTIC", "CUSTOMER_DEPLOYMENT"} <= {flag.code for flag in result.matched_green_flags}
+
+
 def test_independent_conjunction_resets_negation_without_comma() -> None:
     from app.scoring.v2 import score_job_v2
 
@@ -269,6 +288,61 @@ def test_independent_conjunction_resets_negation_without_comma() -> None:
             title="AI Engineer",
             description=(
                 "There is little bureaucracy and the team will build and deploy AI agents."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score > 0
+    assert result.dimensions["build_and_ship"].score > 0
+
+
+def test_generic_multiword_noun_subject_resets_prior_negation() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description=(
+                "There is little reporting, and platform specialists will design and deploy "
+                "RAG systems."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score > 0
+    assert result.dimensions["build_and_ship"].score > 0
+
+
+def test_relative_clause_predicate_does_not_negate_prior_responsibility() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description="You will build AI agents for clients who are not involved.",
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score > 0
+    assert result.dimensions["build_and_ship"].score > 0
+    assert "AGENTIC" in {flag.code for flag in result.matched_green_flags}
+
+
+def test_relative_clause_after_customer_does_not_negate_deployment_list() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description=(
+                "You will build and deploy AI agents for customers that are not included in "
+                "governance meetings."
             ),
         ),
         ProfileEvidence(),

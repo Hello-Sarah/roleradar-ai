@@ -188,10 +188,22 @@ _NEGATION_PATTERN = re.compile(
     r"does\s+not|do\s+not|will\s+not|is\s+not|are\s+not|little|lack|lacks|lacking)\b"
 )
 _NON_NEGATING_PATTERN = re.compile(r"\bnot\s+(?:only|just)\b")
-_SCOPE_RESET_PATTERN = re.compile(
-    r"[;]|\b(?:but|however|instead|rather|whereas|while)\b|"
-    r",?\s+(?:and|or)\s+(?=(?:you|we|they|he|she|the\s+(?:role|candidate|team)|"
-    r"this\s+(?:role|position)|responsibilities)\b)"
+_HARD_SCOPE_BOUNDARY_PATTERN = re.compile(r"[;]|\b(?:but|however|instead|rather|whereas|while)\b")
+_SUBORDINATE_BOUNDARY_PATTERN = re.compile(
+    r"\b(?:who|whom|whose|which|that|where|when|because|although|unless)\b"
+)
+_COORDINATOR_PATTERN = re.compile(r",?\s+(?:and|or)\s+")
+_COMMA_PATTERN = re.compile(r",\s+")
+_FINITE_VERB = (
+    r"will|shall|can|could|must|may|might|should|would|do|does|did|is|are|was|were|"
+    r"has|have|had|builds?|deploys?|designs?|owns?|coordinates?|leads?|writes?|"
+    r"develops?|creates?|manages?|delivers?|evaluates?|experiments?|works?|"
+    r"includes?|involves?|requires?|uses?"
+)
+_FINITE_VERB_PATTERN = re.compile(rf"\b(?:{_FINITE_VERB})\b")
+_SUBJECT_PREDICATE_PATTERN = re.compile(
+    rf"^(?P<subject>(?:(?!(?:and|or|but|who|whom|whose|which|that)\b)"
+    rf"[a-z][a-z0-9'-]*\s+){{1,5}}?)(?P<verb>{_FINITE_VERB})\b"
 )
 _SHARED_POST_NEGATION_PATTERN = re.compile(
     r"\b(?:is|are|was|were|will\s+be)\s+(?:not|never)\s+"
@@ -202,19 +214,49 @@ _SHARED_POST_NEGATION_PATTERN = re.compile(
 )
 
 
+def _is_coordinated_negated_list(
+    text: str, boundary: re.Match[str], predicate: re.Match[str]
+) -> bool:
+    post_predicate = text[boundary.end() + predicate.start("verb") :]
+    if not _SHARED_POST_NEGATION_PATTERN.match(post_predicate):
+        return False
+    prior_hard_boundaries = list(_HARD_SCOPE_BOUNDARY_PATTERN.finditer(text[: boundary.start()]))
+    segment_start = prior_hard_boundaries[-1].end() if prior_hard_boundaries else 0
+    prefix = text[segment_start : boundary.start()]
+    return prefix.count(",") >= 2 or not _FINITE_VERB_PATTERN.search(prefix)
+
+
+def _scope_boundaries(text: str) -> list[tuple[int, int]]:
+    boundaries = [
+        (match.start(), match.end())
+        for pattern in (_HARD_SCOPE_BOUNDARY_PATTERN, _SUBORDINATE_BOUNDARY_PATTERN)
+        for match in pattern.finditer(text)
+    ]
+    for pattern in (_COORDINATOR_PATTERN, _COMMA_PATTERN):
+        for boundary in pattern.finditer(text):
+            predicate = _SUBJECT_PREDICATE_PATTERN.match(text[boundary.end() :])
+            if predicate is None:
+                continue
+            if _is_coordinated_negated_list(text, boundary, predicate):
+                continue
+            boundaries.append((boundary.start(), boundary.end()))
+    return sorted(set(boundaries))
+
+
 def _positive_occurrences(text: str, phrase: str) -> list[re.Match[str]]:
     normalized = text.casefold().replace("→", " to ").replace("’", "'")
     candidate = phrase.casefold().replace("→", " to ")
     matches = list(re.finditer(rf"(?<!\w){re.escape(candidate)}(?!\w)", normalized))
+    boundaries = _scope_boundaries(normalized)
     positive: list[re.Match[str]] = []
     for match in matches:
-        prefix = normalized[: match.start()]
-        resets = list(_SCOPE_RESET_PATTERN.finditer(prefix))
-        scope_prefix = prefix[resets[-1].end() :] if resets else prefix
+        prior_boundaries = [boundary for boundary in boundaries if boundary[1] <= match.start()]
+        scope_start = prior_boundaries[-1][1] if prior_boundaries else 0
+        scope_prefix = normalized[scope_start : match.start()]
         scope_prefix = _NON_NEGATING_PATTERN.sub("", scope_prefix)
-        suffix = normalized[match.end() :]
-        suffix_boundary = _SCOPE_RESET_PATTERN.search(suffix)
-        scope_suffix = suffix[: suffix_boundary.start()] if suffix_boundary else suffix
+        next_boundaries = [boundary for boundary in boundaries if boundary[0] >= match.end()]
+        scope_end = next_boundaries[0][0] if next_boundaries else len(normalized)
+        scope_suffix = normalized[match.end() : scope_end]
         if _NEGATION_PATTERN.search(scope_prefix) or _SHARED_POST_NEGATION_PATTERN.search(
             scope_suffix
         ):
