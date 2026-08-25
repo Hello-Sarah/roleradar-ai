@@ -216,6 +216,109 @@ def test_negated_build_language_cannot_suppress_ai_title_pmo_warning() -> None:
     assert result.dimensions["build_and_ship"].score == 0
 
 
+def test_postposed_negation_applies_to_every_item_in_responsibility_list() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Transformation Lead",
+            description=(
+                "AI agent, prototype, deploy, design, experiment, and architecture are not "
+                "involved. PMO coordination, status tracking, reporting, governance, vendor "
+                "management, and documentation dominate the responsibilities."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    for dimension in ("ai_depth", "build_and_ship", "product_exposure", "technical_exposure"):
+        assert result.dimensions[dimension].score == 0
+    assert not {
+        "AGENTIC",
+        "RAPID_PROTOTYPING",
+        "CUSTOMER_DEPLOYMENT",
+        "TECHNICAL_ARCHITECTURE",
+    } & {flag.code for flag in result.matched_green_flags}
+    assert "AI_TITLE_PMO_SUBSTANCE" in {warning.code for warning in result.critical_warnings}
+
+
+def test_unrelated_prior_clause_negation_does_not_leak_into_responsibilities() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description="There is little bureaucracy, and you will build and deploy AI agents.",
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score > 0
+    assert result.dimensions["build_and_ship"].score > 0
+    assert {"AGENTIC", "CUSTOMER_DEPLOYMENT"} <= {flag.code for flag in result.matched_green_flags}
+
+
+def test_independent_conjunction_resets_negation_without_comma() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description=(
+                "There is little bureaucracy and the team will build and deploy AI agents."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score > 0
+    assert result.dimensions["build_and_ship"].score > 0
+
+
+def test_postposed_negated_list_before_contrast_does_not_negate_affirmative_clause() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description=(
+                "AI agents and RAG are not involved, but you will build prototypes and deploy "
+                "API integrations to production."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score == 0
+    assert result.dimensions["build_and_ship"].score > 0
+    assert result.dimensions["technical_exposure"].score > 0
+    assert "AGENTIC" not in {flag.code for flag in result.matched_green_flags}
+
+
+def test_negated_independent_clause_before_conjunction_does_not_leak() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description=(
+                "We do not coordinate reporting, and we build agentic prototypes and deploy "
+                "them to production."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert not result.matched_red_flags
+    assert result.dimensions["ai_depth"].score > 0
+    assert result.dimensions["build_and_ship"].score > 0
+
+
 def test_workflow_orchestration_green_flag_contributes_to_ai_depth() -> None:
     from app.scoring.v2 import score_job_v2
 

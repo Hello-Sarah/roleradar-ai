@@ -188,11 +188,17 @@ _NEGATION_PATTERN = re.compile(
     r"does\s+not|do\s+not|will\s+not|is\s+not|are\s+not|little|lack|lacks|lacking)\b"
 )
 _NON_NEGATING_PATTERN = re.compile(r"\bnot\s+(?:only|just)\b")
-_SCOPE_RESET_PATTERN = re.compile(r"(?:[;]|\b(?:but|however|instead|rather)\b)")
-_POST_NEGATION_PATTERN = re.compile(
-    r"^\s*(?:is|are|was|were|will be)?\s*(?:not|never)\b|"
-    r"^\s*(?:isn't|aren't|wasn't|weren't)\b|"
-    r"^\s*(?:is|are)?\s*(?:excluded|out of scope)\b"
+_SCOPE_RESET_PATTERN = re.compile(
+    r"[;]|\b(?:but|however|instead|rather|whereas|while)\b|"
+    r",?\s+(?:and|or)\s+(?=(?:you|we|they|he|she|the\s+(?:role|candidate|team)|"
+    r"this\s+(?:role|position)|responsibilities)\b)"
+)
+_SHARED_POST_NEGATION_PATTERN = re.compile(
+    r"\b(?:is|are|was|were|will\s+be)\s+(?:not|never)\s+"
+    r"(?:involved|required|included|expected|used|part\s+of\s+(?:the\s+)?scope|in\s+scope)\b|"
+    r"\b(?:is|are|was|were)\s+(?:excluded|out\s+of\s+scope)\b|"
+    r"\b(?:isn't|aren't|wasn't|weren't)\s+"
+    r"(?:involved|required|included|expected|used)\b"
 )
 
 
@@ -209,7 +215,9 @@ def _positive_occurrences(text: str, phrase: str) -> list[re.Match[str]]:
         suffix = normalized[match.end() :]
         suffix_boundary = _SCOPE_RESET_PATTERN.search(suffix)
         scope_suffix = suffix[: suffix_boundary.start()] if suffix_boundary else suffix
-        if _NEGATION_PATTERN.search(scope_prefix) or _POST_NEGATION_PATTERN.search(scope_suffix):
+        if _NEGATION_PATTERN.search(scope_prefix) or _SHARED_POST_NEGATION_PATTERN.search(
+            scope_suffix
+        ):
             continue
         positive.append(match)
     return positive
