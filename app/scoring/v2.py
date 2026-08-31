@@ -200,7 +200,6 @@ _FINITE_VERB = (
     r"develops?|creates?|manages?|delivers?|evaluates?|experiments?|works?|"
     r"includes?|involves?|requires?|uses?"
 )
-_FINITE_VERB_PATTERN = re.compile(rf"\b(?:{_FINITE_VERB})\b")
 _SUBJECT_PREDICATE_PATTERN = re.compile(
     rf"^(?P<subject>(?:(?!(?:and|or|but|who|whom|whose|which|that)\b)"
     rf"[a-z][a-z0-9'-]*\s+){{1,5}}?)(?P<verb>{_FINITE_VERB})\b"
@@ -223,7 +222,8 @@ def _is_coordinated_negated_list(
     prior_hard_boundaries = list(_HARD_SCOPE_BOUNDARY_PATTERN.finditer(text[: boundary.start()]))
     segment_start = prior_hard_boundaries[-1].end() if prior_hard_boundaries else 0
     prefix = text[segment_start : boundary.start()]
-    return prefix.count(",") >= 2 or not _FINITE_VERB_PATTERN.search(prefix)
+    prior_segments = (segment.strip() for segment in _COMMA_PATTERN.split(prefix))
+    return not any(_SUBJECT_PREDICATE_PATTERN.match(segment) for segment in prior_segments)
 
 
 def _scope_boundaries(text: str) -> list[tuple[int, int]]:

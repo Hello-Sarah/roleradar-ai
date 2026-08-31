@@ -243,6 +243,80 @@ def test_postposed_negation_applies_to_every_item_in_responsibility_list() -> No
     assert "AI_TITLE_PMO_SUBSTANCE" in {warning.code for warning in result.critical_warnings}
 
 
+def test_independent_trailing_negated_clause_preserves_exact_affirmative_ai_depth() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description=(
+                "We build AI agents, deploy RAG, evaluate LLMs, and you are not involved."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score == 16
+    assert result.dimensions["build_and_ship"].score == 8
+    assert {"AGENTIC", "RAG", "LLM", "EVALUATION", "CUSTOMER_DEPLOYMENT"} <= {
+        flag.code for flag in result.matched_green_flags
+    }
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        (
+            "Platform engineers build AI agents, deploy RAG, evaluate LLMs, and delivery "
+            "partners are not involved."
+        ),
+        (
+            "In practice, platform specialists build AI agents, deploy RAG, evaluate LLMs, "
+            "and external advisors are not included."
+        ),
+    ],
+)
+def test_generic_independent_trailing_subject_does_not_negate_prior_clause(
+    description: str,
+) -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(title="AI Engineer", description=description),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score == 16
+    assert result.dimensions["build_and_ship"].score == 8
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "AI agents, RAG systems, LLM evaluation, and technical architecture are not involved.",
+        (
+            "For this role, AI agents, RAG systems, LLM evaluation, and technical architecture "
+            "are not included."
+        ),
+    ],
+)
+def test_shared_postposed_predicate_variants_negate_the_entire_list(description: str) -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(title="AI Transformation Lead", description=description),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score == 0
+    assert not {"AGENTIC", "RAG", "LLM", "EVALUATION", "TECHNICAL_ARCHITECTURE"} & {
+        flag.code for flag in result.matched_green_flags
+    }
+
+
 def test_unrelated_prior_clause_negation_does_not_leak_into_responsibilities() -> None:
     from app.scoring.v2 import score_job_v2
 
