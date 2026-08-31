@@ -267,6 +267,110 @@ def test_independent_trailing_negated_clause_preserves_exact_affirmative_ai_dept
 @pytest.mark.parametrize(
     "description",
     [
+        "Build AI agents, deploy RAG, evaluate LLMs, and you are not involved.",
+        ("Build AI agents, deploy RAG, evaluate LLMs, and external advisors are not included."),
+    ],
+)
+def test_imperative_responsibilities_are_independent_from_negated_tail_clause(
+    description: str,
+) -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(title="AI Engineer", description=description),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score == 16
+    assert result.dimensions["build_and_ship"].score == 8
+    assert {"AGENTIC", "RAG", "LLM", "EVALUATION", "CUSTOMER_DEPLOYMENT"} <= {
+        flag.code for flag in result.matched_green_flags
+    }
+
+
+@pytest.mark.parametrize(
+    ("description", "dimension", "expected_score"),
+    [
+        (
+            "For each launch, build AI agents, deploy RAG, evaluate LLMs, and external "
+            "advisors are not included.",
+            "ai_depth",
+            16,
+        ),
+        (
+            "Design API integration, build a prototype, deploy systems, and review "
+            "participants are not involved.",
+            "build_and_ship",
+            12,
+        ),
+    ],
+)
+def test_coordinated_imperative_predicates_with_complements_remain_affirmative(
+    description: str,
+    dimension: str,
+    expected_score: int,
+) -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(title="AI Engineer", description=description),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions[dimension].score == expected_score
+
+
+def test_conjunction_coordinated_imperative_predicates_remain_affirmative() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description=(
+                "Build AI agents and deploy RAG and evaluate LLMs, and external advisors "
+                "are not included."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score == 16
+    assert result.dimensions["build_and_ship"].score == 8
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "AI agents, RAG systems, LLM evaluation, and external advisors are not included.",
+        "AI agent, build, deploy, evaluate, and architecture are not involved.",
+        ("AI agents and RAG systems and LLM evaluation, and external advisors are not included."),
+    ],
+)
+def test_nominal_and_bare_item_lists_keep_shared_postposed_negation(
+    description: str,
+) -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(title="AI Transformation Lead", description=description),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score == 0
+    assert result.dimensions["build_and_ship"].score == 0
+    assert result.dimensions["technical_exposure"].score == 0
+    assert not {"AGENTIC", "RAG", "LLM", "EVALUATION", "CUSTOMER_DEPLOYMENT"} & {
+        flag.code for flag in result.matched_green_flags
+    }
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
         (
             "Platform engineers build AI agents, deploy RAG, evaluate LLMs, and delivery "
             "partners are not involved."

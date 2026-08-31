@@ -204,6 +204,11 @@ _SUBJECT_PREDICATE_PATTERN = re.compile(
     rf"^(?P<subject>(?:(?!(?:and|or|but|who|whom|whose|which|that)\b)"
     rf"[a-z][a-z0-9'-]*\s+){{1,5}}?)(?P<verb>{_FINITE_VERB})\b"
 )
+_IMPERATIVE_VERB = (
+    r"build|deploy|design|own|coordinate|lead|write|develop|create|manage|deliver|evaluate|"
+    r"experiment|work|include|involve|require|use"
+)
+_IMPERATIVE_PREDICATE_PATTERN = re.compile(rf"^(?:{_IMPERATIVE_VERB})\b\s+(?!(?:and|or)\b)\S+")
 _SHARED_POST_NEGATION_PATTERN = re.compile(
     r"\b(?:is|are|was|were|will\s+be)\s+(?:not|never)\s+"
     r"(?:involved|required|included|expected|used|part\s+of\s+(?:the\s+)?scope|in\s+scope)\b|"
@@ -222,8 +227,18 @@ def _is_coordinated_negated_list(
     prior_hard_boundaries = list(_HARD_SCOPE_BOUNDARY_PATTERN.finditer(text[: boundary.start()]))
     segment_start = prior_hard_boundaries[-1].end() if prior_hard_boundaries else 0
     prefix = text[segment_start : boundary.start()]
-    prior_segments = (segment.strip() for segment in _COMMA_PATTERN.split(prefix))
-    return not any(_SUBJECT_PREDICATE_PATTERN.match(segment) for segment in prior_segments)
+    prior_segments = tuple(
+        segment.strip()
+        for comma_segment in _COMMA_PATTERN.split(prefix)
+        for segment in _COORDINATOR_PATTERN.split(comma_segment)
+    )
+    has_explicit_subject = any(
+        _SUBJECT_PREDICATE_PATTERN.match(segment) for segment in prior_segments
+    )
+    imperative_predicate_count = sum(
+        _IMPERATIVE_PREDICATE_PATTERN.match(segment) is not None for segment in prior_segments
+    )
+    return not (has_explicit_subject or imperative_predicate_count >= 2)
 
 
 def _scope_boundaries(text: str) -> list[tuple[int, int]]:
