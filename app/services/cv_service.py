@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,10 +17,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import Settings
-from app.database.models import CVDocument, Job
+from app.database.models import CVDocument, GeneratedCV, Job
 from app.schemas import CVDocumentRead, CVLibraryScanRead, GeneratedCVRead
 
 SUPPORTED_CV_SUFFIXES = {".docx", ".pdf", ".txt"}
+CV_PROMPT_VERSION = "tailored-cv-v1"
 logger = logging.getLogger(__name__)
 
 
@@ -173,15 +175,19 @@ def _validate_evidence(content: TailoredCVContent, corpus: str) -> None:
         )
 
 
+def _source_corpus(documents: list[CVDocument]) -> str:
+    return "\n\n".join(
+        f"=== SOURCE CV {document.id}: {document.file_name} ===\n{document.extracted_text}"
+        for document in documents
+    )
+
+
 def _generate_content(
     documents: list[CVDocument], job: Job, settings: Settings
 ) -> TailoredCVContent:
     if not settings.openai_api_key:
         raise CVLibraryError("OPENAI_API_KEY is required to generate a tailored CV")
-    corpus = "\n\n".join(
-        f"=== SOURCE CV {document.id}: {document.file_name} ===\n{document.extracted_text}"
-        for document in documents
-    )
+    corpus = _source_corpus(documents)
     client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
     response = client.responses.parse(
         model=settings.openai_model,
@@ -289,20 +295,52 @@ def generate_tailored_cv(db: Session, job_id: int, settings: Settings) -> Genera
     if not documents:
         raise CVLibraryError("The CV library is empty; scan the configured folder first")
     content = _generate_content(documents, job, settings)
+    # Preserve this deterministic gate at the generation boundary so validation cannot be
+    # bypassed by a future provider adapter or an internal caller.
+    _validate_evidence(content, _source_corpus(documents))
     output_directory = _configured_directory(settings.generated_cv_path)
     file_name = f"{_safe_filename(content.name.text)}—{_safe_filename(job.title)}-chatgpt.docx"
     output = output_directory / file_name
-    _build_docx(content, output)
+    temporary_output = output_directory / f".{uuid.uuid4().hex}.docx"
+    try:
+        _build_docx(content, temporary_output)
+        output_hash = _fingerprint(temporary_output)
+        temporary_output.replace(output)
+        generated_at = datetime.now(UTC)
+        generated = GeneratedCV(
+            job_id=job.id,
+            file_name=file_name,
+            file_path=str(output),
+            output_hash=output_hash,
+            source_cv_ids=[document.id for document in documents],
+            source_cv_hashes={str(document.id): document.fingerprint for document in documents},
+            model_version=settings.openai_model,
+            prompt_version=CV_PROMPT_VERSION,
+            generated_at=generated_at,
+        )
+        db.add(generated)
+        db.commit()
+        db.refresh(generated)
+    except Exception:
+        db.rollback()
+        temporary_output.unlink(missing_ok=True)
+        raise
     logger.info(
-        "Saved tailored CV for job_id=%s using source_cv_ids=%s to %s",
+        "Saved tailored CV id=%s for job_id=%s using source_cv_ids=%s to %s",
+        generated.id,
         job.id,
         [document.id for document in documents],
         output,
     )
     return GeneratedCVRead(
+        id=generated.id,
         job_id=job.id,
         file_name=file_name,
         file_path=str(output),
         source_cv_ids=[document.id for document in documents],
-        generated_at=datetime.now(UTC),
+        source_cv_hashes={str(document.id): document.fingerprint for document in documents},
+        output_hash=output_hash,
+        model_version=settings.openai_model,
+        prompt_version=CV_PROMPT_VERSION,
+        generated_at=generated_at,
     )

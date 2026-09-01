@@ -93,6 +93,9 @@ class Job(TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="ApplicationEvent.occurred_at.desc()",
     )
+    generated_cvs: Mapped[list["GeneratedCV"]] = relationship(
+        back_populates="job", order_by="GeneratedCV.generated_at.desc()"
+    )
 
     @property
     def analysis(self) -> "JobAnalysis | None":
@@ -165,6 +168,23 @@ class CVDocument(TimestampMixin, Base):
     modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     extracted_text: Mapped[str] = mapped_column(Text)
     active: Mapped[bool] = mapped_column(default=True, index=True)
+
+
+class GeneratedCV(Base):
+    __tablename__ = "generated_cvs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("jobs.id"), index=True)
+    file_name: Mapped[str] = mapped_column(String(500), index=True)
+    file_path: Mapped[str] = mapped_column(Text)
+    output_hash: Mapped[str] = mapped_column(String(64))
+    source_cv_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    source_cv_hashes: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    model_version: Mapped[str] = mapped_column(String(200))
+    prompt_version: Mapped[str] = mapped_column(String(100))
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    job: Mapped[Job] = relationship(back_populates="generated_cvs")
 
 
 class WatchListCompany(TimestampMixin, Base):

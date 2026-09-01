@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, Response
@@ -327,16 +328,23 @@ def create_tailored_cv(job_id: int, db: Db, settings: AppSettings) -> GeneratedC
         ) from exc
 
 
-@router.get("/generated-cvs/{file_name}", response_class=FileResponse)
+@router.get("/generated-cvs/{file_name:path}", response_class=FileResponse)
 def download_generated_cv(file_name: str, settings: AppSettings) -> FileResponse:
-    if Path(file_name).name != file_name:
+    decoded_file_name = unquote(file_name)
+    if (
+        not decoded_file_name
+        or Path(decoded_file_name).name != decoded_file_name
+        or decoded_file_name in {".", ".."}
+        or "\x00" in decoded_file_name
+        or Path(decoded_file_name).suffix.casefold() != ".docx"
+    ):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file name")
     output_directory = Path(settings.generated_cv_path).expanduser().resolve()
-    output = (output_directory / file_name).resolve()
+    output = (output_directory / decoded_file_name).resolve()
     if output.parent != output_directory or not output.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
     return FileResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=file_name,
+        filename=decoded_file_name,
     )

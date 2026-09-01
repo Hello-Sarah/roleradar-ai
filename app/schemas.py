@@ -344,8 +344,13 @@ class CVLibraryScanRead(BaseModel):
 
 
 class GeneratedCVRead(BaseModel):
+    id: int
     job_id: int
     file_name: str
     file_path: str
     source_cv_ids: list[int]
+    source_cv_hashes: dict[str, str]
+    output_hash: str
+    model_version: str
+    prompt_version: str
     generated_at: datetime
