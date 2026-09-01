@@ -1,5 +1,6 @@
 import hashlib
 from datetime import UTC
+from pathlib import Path
 
 import pytest
 from docx import Document
@@ -116,7 +117,13 @@ def test_generation_preserves_source_bytes_and_stores_complete_provenance(
         "Built reliable Python APIs for banking users.",
         encoding="utf-8",
     )
+    supplemental_source = source / "supplemental.txt"
+    supplemental_source.write_text(
+        "Python automation experience supporting reliable banking data workflows.",
+        encoding="utf-8",
+    )
     source_hash = hashlib.sha256(source_file.read_bytes()).hexdigest()
+    supplemental_hash = hashlib.sha256(supplemental_source.read_bytes()).hexdigest()
     scan = scan_cv_library(db, Settings(cv_library_path=str(source)))
     job = _job(db)
     settings = Settings(
@@ -136,16 +143,16 @@ def test_generation_preserves_source_bytes_and_stores_complete_provenance(
     assert result.file_name == "Jane Doe—Applied AI Engineer-chatgpt.docx"
     assert generated is not None
     assert generated.job_id == job.id
-    assert generated.source_cv_ids == [scan.documents[0].id]
-    assert generated.source_cv_hashes == {str(scan.documents[0].id): source_hash}
+    assert generated.source_cv_ids == [document.id for document in scan.documents]
+    assert generated.source_cv_hashes == {
+        str(scan.documents[0].id): source_hash,
+        str(scan.documents[1].id): supplemental_hash,
+    }
     assert generated.model_version == "test-model"
     assert generated.prompt_version
     # SQLite does not round-trip timezone metadata, unlike the production database.
     assert generated.generated_at.replace(tzinfo=UTC) == result.generated_at
-    assert (
-        generated.output_hash
-        == hashlib.sha256((output / result.file_name).read_bytes()).hexdigest()
-    )
+    assert generated.output_hash == hashlib.sha256(Path(result.file_path).read_bytes()).hexdigest()
 
 
 def test_unsupported_generation_stops_before_writing_a_file(db, tmp_path, monkeypatch) -> None:
@@ -241,6 +248,114 @@ def test_evidence_validation_rejects_unsupported_claim() -> None:
         assert "without verifiable CV evidence" in str(exc)
     else:
         raise AssertionError("Unsupported claims must be rejected")
+
+
+def test_evidence_validation_rejects_claim_text_that_does_not_match_its_quote() -> None:
+    content = _validated_content().model_copy(
+        update={"skills": [EvidenceBackedItem(text="Led 100 engineers", source_quote="Python")]}
+    )
+
+    with pytest.raises(CVLibraryError, match="without verifiable CV evidence"):
+        _validate_evidence(
+            content,
+            "Jane Doe jane@example.com · Hong Kong Applied AI Engineer Python "
+            "Built reliable Python APIs for banking users.",
+        )
+
+
+def test_evidence_validation_rejects_invented_section_title() -> None:
+    content = _validated_content().model_copy(
+        update={
+            "sections": [
+                TailoredCVSection(
+                    title="Invented Employer — 2019 to 2024",
+                    items=[
+                        EvidenceBackedItem(
+                            text="Built reliable Python APIs for banking users.",
+                            source_quote="Built reliable Python APIs for banking users.",
+                        )
+                    ],
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(CVLibraryError, match="controlled section labels"):
+        _validate_evidence(
+            content,
+            "Jane Doe jane@example.com · Hong Kong Applied AI Engineer Python "
+            "Built reliable Python APIs for banking users.",
+        )
+
+
+def test_commit_failure_leaves_no_published_artifact_or_provenance(
+    db, tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "cv-library"
+    output = tmp_path / "generated"
+    source.mkdir()
+    (source / "main.txt").write_text(
+        "Jane Doe\njane@example.com · Hong Kong\nApplied AI Engineer\n"
+        "Built reliable Python APIs for banking users.",
+        encoding="utf-8",
+    )
+    scan_cv_library(db, Settings(cv_library_path=str(source)))
+    job = _job(db)
+    monkeypatch.setattr(
+        "app.services.cv_service._generate_content", lambda *_: _validated_content()
+    )
+
+    def fail_commit() -> None:
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(db, "commit", fail_commit)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        generate_tailored_cv(
+            db,
+            job.id,
+            Settings(
+                cv_library_path=str(source),
+                generated_cv_path=str(output),
+                openai_api_key="test-key",
+            ),
+        )
+
+    assert not list(output.rglob("*.docx"))
+    assert db.query(GeneratedCV).count() == 0
+
+
+def test_repeated_generation_preserves_each_artifact_bytes_and_provenance(
+    db, tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "cv-library"
+    output = tmp_path / "generated"
+    source.mkdir()
+    (source / "main.txt").write_text(
+        "Jane Doe\njane@example.com · Hong Kong\nApplied AI Engineer\n"
+        "Built reliable Python APIs for banking users.",
+        encoding="utf-8",
+    )
+    scan_cv_library(db, Settings(cv_library_path=str(source)))
+    job = _job(db)
+    settings = Settings(
+        cv_library_path=str(source),
+        generated_cv_path=str(output),
+        openai_api_key="test-key",
+    )
+    monkeypatch.setattr(
+        "app.services.cv_service._generate_content", lambda *_: _validated_content()
+    )
+
+    first = generate_tailored_cv(db, job.id, settings)
+    first_bytes = Path(first.file_path).read_bytes()
+    second = generate_tailored_cv(db, job.id, settings)
+
+    assert first.file_name == second.file_name == "Jane Doe—Applied AI Engineer-chatgpt.docx"
+    assert first.file_path != second.file_path
+    assert Path(first.file_path).read_bytes() == first_bytes
+    assert hashlib.sha256(first_bytes).hexdigest() == first.output_hash
+    assert hashlib.sha256(Path(second.file_path).read_bytes()).hexdigest() == second.output_hash
+    assert db.query(GeneratedCV).count() == 2
 
 
 def test_safe_filename_removes_path_characters() -> None:

@@ -295,7 +295,8 @@ try:
                 if generated:
                     st.success(f"Generated: {generated['file_name']}")
                     download_url = (
-                        f"{client.base_url}/api/v1/generated-cvs/{quote(generated['file_name'])}"
+                        f"{client.base_url}/api/v1/generated-cvs/{generated['id']}/"
+                        f"{quote(generated['file_name'], safe='')}"
                     )
                     st.link_button("Download tailored CV", download_url, type="primary")
             else:

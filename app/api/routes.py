@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
+from app.database.models import GeneratedCV
 from app.database.session import get_db
 from app.i18n.service import translate
 from app.ingestion.text_extractor import extract_job_from_text
@@ -328,8 +329,10 @@ def create_tailored_cv(job_id: int, db: Db, settings: AppSettings) -> GeneratedC
         ) from exc
 
 
-@router.get("/generated-cvs/{file_name:path}", response_class=FileResponse)
-def download_generated_cv(file_name: str, settings: AppSettings) -> FileResponse:
+@router.get("/generated-cvs/{generated_cv_id}/{file_name:path}", response_class=FileResponse)
+def download_generated_cv(
+    generated_cv_id: int, file_name: str, db: Db, settings: AppSettings
+) -> FileResponse:
     decoded_file_name = unquote(file_name)
     if (
         not decoded_file_name
@@ -340,12 +343,26 @@ def download_generated_cv(file_name: str, settings: AppSettings) -> FileResponse
         or Path(decoded_file_name).suffix.casefold() != ".docx"
     ):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid file name")
+    generated = db.get(GeneratedCV, generated_cv_id)
+    if generated is None or generated.file_name != decoded_file_name:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
     output_directory = Path(settings.generated_cv_path).expanduser().resolve()
-    output = (output_directory / decoded_file_name).resolve()
-    if output.parent != output_directory or not output.is_file():
+    output = Path(generated.file_path).resolve()
+    try:
+        output.relative_to(output_directory)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found") from exc
+    if output.name != decoded_file_name or not output.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
     return FileResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=decoded_file_name,
     )
+
+
+@router.get("/generated-cvs/{file_name:path}", include_in_schema=False)
+def download_generated_cv_legacy(file_name: str) -> None:
+    """Avoid ambiguous filename-only artifact retrieval after immutable output storage."""
+    del file_name
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")

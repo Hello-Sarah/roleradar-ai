@@ -2,6 +2,7 @@ import hashlib
 import logging
 import re
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,9 @@ from app.schemas import CVDocumentRead, CVLibraryScanRead, GeneratedCVRead
 
 SUPPORTED_CV_SUFFIXES = {".docx", ".pdf", ".txt"}
 CV_PROMPT_VERSION = "tailored-cv-v1"
+CONTROLLED_SECTION_LABELS = frozenset(
+    {"Experience", "Professional Experience", "Education", "Projects", "Certifications"}
+)
 logger = logging.getLogger(__name__)
 
 
@@ -167,12 +171,21 @@ def _validate_evidence(content: TailoredCVContent, corpus: str) -> None:
         items.append(content.contact)
     items.extend(item for section in content.sections for item in section.items)
     unsupported = [
-        item.text for item in items if not _normalized_contains(corpus, item.source_quote)
+        item.text
+        for item in items
+        if item.text != item.source_quote or not _normalized_contains(corpus, item.source_quote)
     ]
     if unsupported:
         raise CVLibraryError(
             "The model produced claims without verifiable CV evidence; generation was stopped"
         )
+    uncontrolled_titles = [
+        section.title
+        for section in content.sections
+        if section.title not in CONTROLLED_SECTION_LABELS
+    ]
+    if uncontrolled_titles:
+        raise CVLibraryError("Tailored CV sections must use controlled section labels")
 
 
 def _source_corpus(documents: list[CVDocument]) -> str:
@@ -197,9 +210,11 @@ def _generate_content(
                 "content": (
                     "Create an ATS-friendly tailored CV using only facts present in the source "
                     "CVs. Never invent skills, employers, dates, achievements, metrics, education, "
-                    "or credentials. Reorder and concisely rewrite true evidence for relevance. "
-                    "Every output item must include an exact source_quote copied from the CV "
-                    "corpus."
+                    "or credentials. Every output item's text must exactly equal an exact "
+                    "source_quote copied from the CV corpus; do not rewrite it. "
+                    "Section titles must be one of: Experience, Professional Experience, "
+                    "Education, Projects, or "
+                    "Certifications."
                 ),
             },
             {
@@ -300,11 +315,13 @@ def generate_tailored_cv(db: Session, job_id: int, settings: Settings) -> Genera
     _validate_evidence(content, _source_corpus(documents))
     output_directory = _configured_directory(settings.generated_cv_path)
     file_name = f"{_safe_filename(content.name.text)}—{_safe_filename(job.title)}-chatgpt.docx"
-    output = output_directory / file_name
+    artifact_directory = output_directory / "artifacts" / uuid.uuid4().hex
+    output = artifact_directory / file_name
     temporary_output = output_directory / f".{uuid.uuid4().hex}.docx"
     try:
         _build_docx(content, temporary_output)
         output_hash = _fingerprint(temporary_output)
+        artifact_directory.mkdir(parents=True, exist_ok=False)
         temporary_output.replace(output)
         generated_at = datetime.now(UTC)
         generated = GeneratedCV(
@@ -324,6 +341,9 @@ def generate_tailored_cv(db: Session, job_id: int, settings: Settings) -> Genera
     except Exception:
         db.rollback()
         temporary_output.unlink(missing_ok=True)
+        output.unlink(missing_ok=True)
+        with suppress(OSError):
+            artifact_directory.rmdir()
         raise
     logger.info(
         "Saved tailored CV id=%s for job_id=%s using source_cv_ids=%s to %s",
