@@ -169,6 +169,34 @@ def test_alembic_upgrades_empty_database(tmp_path) -> None:
     assert {"application_events", "cv_documents", "workflow_runs"} <= table_names(url)
 
 
+def test_watchlist_migration_creates_source_history_and_initial_seed(tmp_path) -> None:
+    url = f"sqlite:///{tmp_path / 'watchlist-migration.db'}"
+
+    upgrade_database(url)
+
+    engine = create_engine(url)
+    try:
+        assert {"watchlist_companies", "watchlist_source_state_events"} <= table_names(url)
+        with engine.connect() as connection:
+            count = connection.execute(
+                text("SELECT COUNT(*) FROM watchlist_companies")
+            ).scalar_one()
+            hsbc = connection.execute(
+                text(
+                    "SELECT company_type, strategic_priority FROM watchlist_companies "
+                    "WHERE name = 'HSBC'"
+                )
+            ).one()
+            capgemini_type = connection.execute(
+                text("SELECT company_type FROM watchlist_companies WHERE name = 'Capgemini'")
+            ).scalar_one()
+        assert count == 36
+        assert hsbc == ("financial_institution", "strict_filter")
+        assert capgemini_type == "consulting_professional_services"
+    finally:
+        engine.dispose()
+
+
 def test_alembic_preserves_known_unversioned_legacy_database(tmp_path) -> None:
     url = f"sqlite:///{tmp_path / 'legacy.db'}"
     engine = create_engine(url)

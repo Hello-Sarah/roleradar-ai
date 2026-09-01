@@ -87,6 +87,26 @@ def test_create_job_from_pasted_text(client: TestClient) -> None:
     assert job["source"] == "pasted_text"
 
 
+def test_rich_pasted_job_fallback_respects_explanation_list_bounds(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/v1/jobs/from-text",
+        json={
+            "text": (
+                "Applied AI Engineer — DemoAI — Hong Kong\n"
+                "Build and deploy AI agents, RAG systems and API integrations from prototype "
+                "to production. Own end-to-end delivery, technical architecture, evaluation, "
+                "user discovery and product roadmap for banking customers. Python, SQL, Docker "
+                "and AWS required."
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["analysis"]["summary"]
+
+
 def test_preview_extraction_does_not_persist_job(client: TestClient) -> None:
     response = client.post(
         "/api/v1/jobs/extract",

@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterable
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -17,6 +18,10 @@ class LLMExplanation(BaseModel):
     summary: str = Field(min_length=20, max_length=500)
 
 
+def _bounded_items(items: Iterable[str], fallback: str) -> list[str]:
+    return list(dict.fromkeys(items))[:6] or [fallback]
+
+
 def _fallback_summary(job: JobCreate, result: CareerFitV2) -> LLMExplanation:
     strengths = [flag.code for flag in result.matched_green_flags]
     gaps = [
@@ -25,9 +30,12 @@ def _fallback_summary(job: JobCreate, result: CareerFitV2) -> LLMExplanation:
         for weak in dimension.missing_or_weak_evidence
     ]
     return LLMExplanation(
-        strengths=strengths or ["NO_MATCHED_GREEN_FLAGS"],
-        gaps=gaps or ["NO_WEAK_DIMENSIONS"],
-        evidence=[f"{item.id}: {item.text}" for item in result.evidence],
+        strengths=_bounded_items(strengths, "NO_MATCHED_GREEN_FLAGS"),
+        gaps=_bounded_items(gaps, "NO_WEAK_DIMENSIONS"),
+        evidence=_bounded_items(
+            (f"{item.id}: {item.text}" for item in result.evidence),
+            "NO_JD_EVIDENCE",
+        ),
         summary=(
             f"{job.title} at {job.company} is in the {result.recommendation_band} band "
             f"with a deterministic fit score of {result.total_score}/100. "

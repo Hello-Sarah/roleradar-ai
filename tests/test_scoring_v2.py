@@ -322,6 +322,44 @@ def test_coordinated_imperative_predicates_with_complements_remain_affirmative(
     assert result.dimensions[dimension].score == expected_score
 
 
+@pytest.mark.parametrize(
+    ("description", "expected_dimensions", "expected_flags"),
+    [
+        (
+            "Build and deploy AI agents, and you are not involved.",
+            {"ai_depth": 4, "build_and_ship": 8},
+            {"AGENTIC", "CUSTOMER_DEPLOYMENT"},
+        ),
+        (
+            "Design, build, and deploy API integrations, and external advisors are not included.",
+            {"build_and_ship": 8, "technical_exposure": 3},
+            {"API_INTEGRATION", "CUSTOMER_DEPLOYMENT"},
+        ),
+        (
+            "Build, deploy, and evaluate LLMs, and you are not involved.",
+            {"ai_depth": 8, "build_and_ship": 8},
+            {"LLM", "EVALUATION", "CUSTOMER_DEPLOYMENT"},
+        ),
+    ],
+)
+def test_shared_complement_imperatives_ignore_independent_negated_tail(
+    description: str,
+    expected_dimensions: dict[str, int],
+    expected_flags: set[str],
+) -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(title="AI Engineer", description=description),
+        ProfileEvidence(),
+    )
+
+    for dimension, expected_score in expected_dimensions.items():
+        assert result.dimensions[dimension].score == expected_score
+    assert expected_flags <= {flag.code for flag in result.matched_green_flags}
+
+
 def test_conjunction_coordinated_imperative_predicates_remain_affirmative() -> None:
     from app.scoring.v2 import score_job_v2
 
@@ -344,9 +382,7 @@ def test_conjunction_coordinated_imperative_predicates_remain_affirmative() -> N
 @pytest.mark.parametrize(
     "description",
     [
-        "AI agents, RAG systems, LLM evaluation, and external advisors are not included.",
         "AI agent, build, deploy, evaluate, and architecture are not involved.",
-        ("AI agents and RAG systems and LLM evaluation, and external advisors are not included."),
     ],
 )
 def test_nominal_and_bare_item_lists_keep_shared_postposed_negation(
@@ -364,6 +400,26 @@ def test_nominal_and_bare_item_lists_keep_shared_postposed_negation(
     assert result.dimensions["build_and_ship"].score == 0
     assert result.dimensions["technical_exposure"].score == 0
     assert not {"AGENTIC", "RAG", "LLM", "EVALUATION", "CUSTOMER_DEPLOYMENT"} & {
+        flag.code for flag in result.matched_green_flags
+    }
+
+
+def test_nominal_evidence_before_unmatched_negated_subject_remains_affirmative() -> None:
+    from app.scoring.v2 import score_job_v2
+
+    JobEvidence, ProfileEvidence = _scoring_types()
+    result = score_job_v2(
+        JobEvidence(
+            title="AI Engineer",
+            description=(
+                "AI agents, RAG systems, LLM evaluation, and external advisors are not included."
+            ),
+        ),
+        ProfileEvidence(),
+    )
+
+    assert result.dimensions["ai_depth"].score == 16
+    assert {"AGENTIC", "RAG", "LLM", "EVALUATION"} <= {
         flag.code for flag in result.matched_green_flags
     }
 

@@ -216,6 +216,18 @@ _SHARED_POST_NEGATION_PATTERN = re.compile(
     r"\b(?:isn't|aren't|wasn't|weren't)\s+"
     r"(?:involved|required|included|expected|used)\b"
 )
+_SCORING_EVIDENCE_PHRASES = tuple(
+    dict.fromkeys(
+        phrase
+        for phrases in (
+            *(rule.phrases for rules in DIMENSION_RULES.values() for rule in rules),
+            *GREEN_FLAG_PHRASES.values(),
+            *RED_FLAG_PHRASES.values(),
+            COUNTER_EVIDENCE_PHRASES,
+        )
+        for phrase in phrases
+    )
+)
 
 
 def _is_coordinated_negated_list(
@@ -223,6 +235,9 @@ def _is_coordinated_negated_list(
 ) -> bool:
     post_predicate = text[boundary.end() + predicate.start("verb") :]
     if not _SHARED_POST_NEGATION_PATTERN.match(post_predicate):
+        return False
+    negative_subject = predicate.group("subject").strip()
+    if not any(_contains(negative_subject, phrase) for phrase in _SCORING_EVIDENCE_PHRASES):
         return False
     prior_hard_boundaries = list(_HARD_SCOPE_BOUNDARY_PATTERN.finditer(text[: boundary.start()]))
     segment_start = prior_hard_boundaries[-1].end() if prior_hard_boundaries else 0
@@ -278,6 +293,12 @@ def _positive_occurrences(text: str, phrase: str) -> list[re.Match[str]]:
             continue
         positive.append(match)
     return positive
+
+
+def positive_evidence_phrases(text: str, phrases: Iterable[str]) -> list[str]:
+    """Return phrases supported by affirmative evidence under V2 negation scope rules."""
+
+    return [phrase for phrase in phrases if _positive_occurrences(text, phrase)]
 
 
 def _matching_ids(evidence: Iterable[EvidenceItem], phrases: Iterable[str]) -> list[str]:

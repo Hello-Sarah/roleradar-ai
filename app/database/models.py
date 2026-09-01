@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Date,
     DateTime,
     Float,
@@ -164,6 +165,54 @@ class CVDocument(TimestampMixin, Base):
     modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     extracted_text: Mapped[str] = mapped_column(Text)
     active: Mapped[bool] = mapped_column(default=True, index=True)
+
+
+class WatchListCompany(TimestampMixin, Base):
+    __tablename__ = "watchlist_companies"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    canonical_domain: Mapped[str] = mapped_column(String(253), unique=True, index=True)
+    company_type: Mapped[str] = mapped_column(String(50), index=True)
+    strategic_priority: Mapped[str] = mapped_column(String(30), index=True)
+    action_window: Mapped[str] = mapped_column(String(40), index=True)
+    target_role_patterns: Mapped[list[str]] = mapped_column(JSON, default=list)
+    target_locations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    positive_keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
+    exclusion_keywords: Mapped[list[str]] = mapped_column(JSON, default=list)
+    location_notes: Mapped[str] = mapped_column(Text, default="")
+    work_authorization_notes: Mapped[str] = mapped_column(Text, default="")
+    official_source_url: Mapped[str] = mapped_column(Text)
+    source_kind: Mapped[str] = mapped_column(String(40))
+    source_state: Mapped[str] = mapped_column(String(30), index=True)
+    source_state_reason: Mapped[str] = mapped_column(Text)
+    last_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    rationale: Mapped[str] = mapped_column(Text)
+
+    source_history: Mapped[list["WatchListSourceStateEvent"]] = relationship(
+        back_populates="company",
+        cascade="all, delete-orphan",
+        order_by="WatchListSourceStateEvent.id",
+    )
+
+
+class WatchListSourceStateEvent(Base):
+    __tablename__ = "watchlist_source_state_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("watchlist_companies.id"), index=True)
+    from_state: Mapped[str] = mapped_column(String(30))
+    to_state: Mapped[str] = mapped_column(String(30))
+    reason: Mapped[str] = mapped_column(Text)
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+    company: Mapped[WatchListCompany] = relationship(back_populates="source_history")
 
 
 class WorkflowRun(TimestampMixin, Base):

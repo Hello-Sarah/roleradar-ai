@@ -4,6 +4,14 @@ from typing import Literal, TypeAlias
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
+from app.watchlist.models import (
+    ActionWindow,
+    CompanyType,
+    SourceKind,
+    SourceState,
+    StrategicPriority,
+)
+
 Locale: TypeAlias = Literal["en", "zh-Hans"]
 
 
@@ -170,6 +178,92 @@ class JobRead(BaseModel):
 
 class StatusUpdate(BaseModel):
     status: ApplicationStatus
+
+
+class WatchListCompanyBase(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    canonical_domain: str = Field(min_length=1, max_length=253)
+    company_type: CompanyType
+    strategic_priority: StrategicPriority
+    action_window: ActionWindow
+    target_role_patterns: list[str] = Field(default_factory=list)
+    target_locations: list[str] = Field(default_factory=list)
+    positive_keywords: list[str] = Field(default_factory=list)
+    exclusion_keywords: list[str] = Field(default_factory=list)
+    location_notes: str = Field(default="", max_length=4_000)
+    work_authorization_notes: str = Field(default="", max_length=4_000)
+    official_source_url: AnyHttpUrl
+    source_kind: SourceKind
+    source_state: SourceState
+    source_state_reason: str = Field(min_length=1, max_length=2_000)
+    last_verified_at: datetime | None = None
+    last_checked_at: datetime | None = None
+    rationale: str = Field(min_length=1, max_length=4_000)
+
+    @model_validator(mode="after")
+    def normalize_identity(self) -> "WatchListCompanyBase":
+        self.name = self.name.strip()
+        self.canonical_domain = self.canonical_domain.strip().casefold().removeprefix("www.")
+        if "/" in self.canonical_domain or ":" in self.canonical_domain:
+            raise ValueError("canonical_domain must be a domain, not a URL")
+        return self
+
+
+class WatchListCompanyCreate(WatchListCompanyBase):
+    pass
+
+
+class WatchListCompanyUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    canonical_domain: str | None = Field(default=None, min_length=1, max_length=253)
+    company_type: CompanyType | None = None
+    strategic_priority: StrategicPriority | None = None
+    action_window: ActionWindow | None = None
+    target_role_patterns: list[str] | None = None
+    target_locations: list[str] | None = None
+    positive_keywords: list[str] | None = None
+    exclusion_keywords: list[str] | None = None
+    location_notes: str | None = Field(default=None, max_length=4_000)
+    work_authorization_notes: str | None = Field(default=None, max_length=4_000)
+    official_source_url: AnyHttpUrl | None = None
+    source_kind: SourceKind | None = None
+    source_state: SourceState | None = None
+    source_state_reason: str | None = Field(default=None, min_length=1, max_length=2_000)
+    last_verified_at: datetime | None = None
+    last_checked_at: datetime | None = None
+    rationale: str | None = Field(default=None, min_length=1, max_length=4_000)
+
+    @model_validator(mode="after")
+    def validate_source_transition_and_identity(self) -> "WatchListCompanyUpdate":
+        if self.source_state is not None and self.source_state_reason is None:
+            raise ValueError("source_state_reason is required when source_state changes")
+        if self.name is not None:
+            self.name = self.name.strip()
+        if self.canonical_domain is not None:
+            self.canonical_domain = self.canonical_domain.strip().casefold().removeprefix("www.")
+            if "/" in self.canonical_domain or ":" in self.canonical_domain:
+                raise ValueError("canonical_domain must be a domain, not a URL")
+        return self
+
+
+class WatchListSourceStateEventRead(BaseModel):
+    id: int
+    from_state: SourceState
+    to_state: SourceState
+    reason: str
+    changed_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WatchListCompanyRead(WatchListCompanyBase):
+    id: int
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+    source_history: list[WatchListSourceStateEventRead] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DigestRead(BaseModel):

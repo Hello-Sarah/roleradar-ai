@@ -2,11 +2,12 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.database.session import get_db
+from app.i18n.service import translate
 from app.ingestion.text_extractor import extract_job_from_text
 from app.ingestion.url_fetcher import JobPageFetchError, fetch_job_from_url
 from app.schemas import (
@@ -26,7 +27,11 @@ from app.schemas import (
     JobPasteCreate,
     JobRead,
     JobUrlCreate,
+    Locale,
     StatusUpdate,
+    WatchListCompanyCreate,
+    WatchListCompanyRead,
+    WatchListCompanyUpdate,
 )
 from app.services.cv_service import (
     CVLibraryError,
@@ -50,6 +55,18 @@ from app.services.job_service import (
     update_status,
 )
 from app.services.profile_service import get_or_create_profile, get_profile_version, upsert_profile
+from app.watchlist.service import (
+    DuplicateWatchListCompanyError,
+    SourceHistoryDeleteError,
+    create_company,
+    delete_company,
+    disable_company,
+    enable_company,
+    get_company,
+    list_companies,
+    to_company_read,
+    update_company,
+)
 
 router = APIRouter(prefix="/api/v1")
 Db = Annotated[Session, Depends(get_db)]
@@ -200,6 +217,87 @@ def dashboard(db: Db) -> DashboardRead:
 @router.get("/digest/daily", response_model=DigestRead)
 def daily_digest(db: Db) -> DigestRead:
     return get_daily_digest(db)
+
+
+@router.post(
+    "/watchlist/companies",
+    response_model=WatchListCompanyRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_watchlist_company(payload: WatchListCompanyCreate, db: Db) -> WatchListCompanyRead:
+    try:
+        return to_company_read(create_company(db, payload))
+    except DuplicateWatchListCompanyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.get("/watchlist/companies", response_model=list[WatchListCompanyRead])
+def read_watchlist_companies(db: Db, include_disabled: bool = True) -> list[WatchListCompanyRead]:
+    return [
+        to_company_read(company)
+        for company in list_companies(db, include_disabled=include_disabled)
+    ]
+
+
+@router.get("/watchlist/companies/{company_id}", response_model=WatchListCompanyRead)
+def read_watchlist_company(company_id: int, db: Db) -> WatchListCompanyRead:
+    try:
+        return to_company_read(get_company(db, company_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.patch("/watchlist/companies/{company_id}", response_model=WatchListCompanyRead)
+def edit_watchlist_company(
+    company_id: int, payload: WatchListCompanyUpdate, db: Db
+) -> WatchListCompanyRead:
+    try:
+        return to_company_read(update_company(db, company_id, payload))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DuplicateWatchListCompanyError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+@router.post("/watchlist/companies/{company_id}/enable", response_model=WatchListCompanyRead)
+def enable_watchlist_company(company_id: int, db: Db) -> WatchListCompanyRead:
+    try:
+        return to_company_read(enable_company(db, company_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/watchlist/companies/{company_id}/disable", response_model=WatchListCompanyRead)
+def disable_watchlist_company(company_id: int, db: Db) -> WatchListCompanyRead:
+    try:
+        return to_company_read(disable_company(db, company_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/watchlist/companies/{company_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def remove_watchlist_company(
+    company_id: int,
+    db: Db,
+    confirm: bool = False,
+    locale: Locale = "en",
+) -> Response:
+    try:
+        delete_company(db, company_id, confirmed=confirm)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except SourceHistoryDeleteError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=translate(locale, "watch_list.disable_instead"),
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/cv-library", response_model=list[CVDocumentRead])
