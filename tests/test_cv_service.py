@@ -324,6 +324,44 @@ def test_commit_failure_leaves_no_published_artifact_or_provenance(
     assert db.query(GeneratedCV).count() == 0
 
 
+def test_post_commit_refresh_failure_cannot_delete_durable_artifact(
+    db, tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "cv-library"
+    output = tmp_path / "generated"
+    source.mkdir()
+    (source / "main.txt").write_text(
+        "Jane Doe\njane@example.com · Hong Kong\nApplied AI Engineer\n"
+        "Built reliable Python APIs for banking users.",
+        encoding="utf-8",
+    )
+    scan_cv_library(db, Settings(cv_library_path=str(source)))
+    job = _job(db)
+    monkeypatch.setattr(
+        "app.services.cv_service._generate_content", lambda *_: _validated_content()
+    )
+    monkeypatch.setattr(
+        db,
+        "refresh",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("refresh unavailable")),
+    )
+
+    generated = generate_tailored_cv(
+        db,
+        job.id,
+        Settings(
+            cv_library_path=str(source),
+            generated_cv_path=str(output),
+            openai_api_key="test-key",
+        ),
+    )
+
+    stored = db.get(GeneratedCV, generated.id)
+    assert stored is not None
+    assert Path(stored.file_path).is_file()
+    assert hashlib.sha256(Path(stored.file_path).read_bytes()).hexdigest() == stored.output_hash
+
+
 def test_repeated_generation_preserves_each_artifact_bytes_and_provenance(
     db, tmp_path, monkeypatch
 ) -> None:

@@ -337,7 +337,6 @@ def generate_tailored_cv(db: Session, job_id: int, settings: Settings) -> Genera
         )
         db.add(generated)
         db.commit()
-        db.refresh(generated)
     except Exception:
         db.rollback()
         temporary_output.unlink(missing_ok=True)
