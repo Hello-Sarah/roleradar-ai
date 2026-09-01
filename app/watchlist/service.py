@@ -85,7 +85,24 @@ def update_company(
 
 def _set_enabled(db: Session, company_id: int, *, enabled: bool, reason: str) -> WatchListCompany:
     company = get_company(db, company_id)
-    target_state = SourceState.UNVERIFIED.value if enabled else SourceState.DISABLED.value
+    if not enabled:
+        target_state = SourceState.DISABLED.value
+    elif company.source_state != SourceState.DISABLED.value:
+        target_state = company.source_state
+    else:
+        disabled_transition = next(
+            (
+                event
+                for event in reversed(company.source_history)
+                if event.to_state == SourceState.DISABLED.value
+            ),
+            None,
+        )
+        target_state = (
+            disabled_transition.from_state
+            if disabled_transition is not None
+            else SourceState.UNVERIFIED.value
+        )
     company.enabled = enabled
     if company.source_state != target_state:
         company.source_history.append(
@@ -122,7 +139,17 @@ def delete_company(db: Session, company_id: int, *, confirmed: bool) -> None:
     if not confirmed:
         raise ValueError("Company deletion requires confirmation")
     company = get_company(db, company_id)
-    if company.source_history:
+    checked_source_states = {
+        SourceState.VERIFIED_MANUAL.value,
+        SourceState.STRUCTURED_READY.value,
+        SourceState.DEGRADED.value,
+    }
+    if (
+        company.source_history
+        or company.last_checked_at is not None
+        or company.last_verified_at is not None
+        or company.source_state in checked_source_states
+    ):
         raise SourceHistoryDeleteError("Watch List company has source history")
     db.delete(company)
     db.commit()

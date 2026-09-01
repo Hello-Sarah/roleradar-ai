@@ -108,6 +108,7 @@ def test_seed_matches_approved_company_classification_and_is_idempotent(db) -> N
         ("New York, NY", ["Hong Kong"], ["New York"], "future"),
         ("Location to be confirmed", ["Hong Kong"], ["New York"], "unclear"),
         ("Remote — USA only", ["Hong Kong"], [], "ineligible"),
+        ("Remote — USA only", ["United States"], [], "eligible"),
     ],
 )
 def test_job_location_eligibility_uses_explicit_evidence(
@@ -168,7 +169,7 @@ def test_authorization_restriction_is_unclear_without_candidate_status() -> None
             title="AI Engineer",
             location="Hong Kong",
             description="Applicants must already be authorized to work in Hong Kong.",
-            analysis=SimpleNamespace(fit_score=80),
+            analysis=SimpleNamespace(fit_score=90),
         ),
         SimpleNamespace(
             strategic_priority="monitor",
@@ -180,6 +181,7 @@ def test_authorization_restriction_is_unclear_without_candidate_status() -> None
 
     assert result.location_eligibility == "eligible"
     assert result.work_authorization == "unclear"
+    assert result.expected_return == "relationship_only"
     assert any("must already be authorized" in item for item in result.work_authorization_evidence)
 
 

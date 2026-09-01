@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import select
 
 
@@ -55,6 +56,39 @@ def test_add_list_edit_and_change_dimensions_independently(client) -> None:
     assert len(client.get("/api/v1/watchlist/companies").json()) == 1
 
 
+@pytest.mark.parametrize(
+    "field",
+    [
+        "name",
+        "canonical_domain",
+        "company_type",
+        "strategic_priority",
+        "action_window",
+        "target_role_patterns",
+        "target_locations",
+        "positive_keywords",
+        "exclusion_keywords",
+        "location_notes",
+        "work_authorization_notes",
+        "official_source_url",
+        "source_kind",
+        "source_state",
+        "source_state_reason",
+        "rationale",
+    ],
+)
+def test_patch_rejects_explicit_null_for_required_stored_fields(client, field: str) -> None:
+    company_id = client.post("/api/v1/watchlist/companies", json=_company_payload()).json()["id"]
+
+    response = client.patch(
+        f"/api/v1/watchlist/companies/{company_id}",
+        json={field: None},
+    )
+
+    assert response.status_code == 422
+    assert client.get(f"/api/v1/watchlist/companies/{company_id}").status_code == 200
+
+
 def test_company_enable_and_disable_are_reversible(client) -> None:
     company_id = client.post("/api/v1/watchlist/companies", json=_company_payload()).json()["id"]
 
@@ -68,6 +102,31 @@ def test_company_enable_and_disable_are_reversible(client) -> None:
     assert [event["to_state"] for event in enabled["source_history"]] == [
         "disabled",
         "unverified",
+    ]
+
+
+def test_enable_restores_verified_source_state_after_disable(client) -> None:
+    company_id = client.post("/api/v1/watchlist/companies", json=_company_payload()).json()["id"]
+    verified = client.patch(
+        f"/api/v1/watchlist/companies/{company_id}",
+        json={
+            "source_state": "verified_manual",
+            "source_state_reason": "Official page checked manually",
+        },
+    )
+    assert verified.status_code == 200
+
+    disabled = client.post(f"/api/v1/watchlist/companies/{company_id}/disable")
+    enabled = client.post(f"/api/v1/watchlist/companies/{company_id}/enable")
+
+    assert disabled.status_code == 200
+    assert enabled.status_code == 200
+    assert enabled.json()["enabled"] is True
+    assert enabled.json()["source_state"] == "verified_manual"
+    assert [event["to_state"] for event in enabled.json()["source_history"]] == [
+        "verified_manual",
+        "disabled",
+        "verified_manual",
     ]
 
 
@@ -100,6 +159,25 @@ def test_delete_with_source_history_is_blocked_with_localized_disable_alternativ
 
     assert blocked.status_code == 409
     assert "停用" in blocked.json()["detail"]
+
+
+@pytest.mark.parametrize("checked_field", ["last_checked_at", "last_verified_at"])
+def test_delete_with_check_timestamp_but_no_transition_history_is_blocked(
+    client, checked_field: str
+) -> None:
+    company_id = client.post("/api/v1/watchlist/companies", json=_company_payload()).json()["id"]
+    checked_at = datetime(2026, 8, 31, 10, tzinfo=UTC).isoformat()
+    changed = client.patch(
+        f"/api/v1/watchlist/companies/{company_id}",
+        json={checked_field: checked_at},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["source_history"] == []
+
+    blocked = client.delete(f"/api/v1/watchlist/companies/{company_id}?confirm=true")
+
+    assert blocked.status_code == 409
+    assert "disable" in blocked.json()["detail"].lower()
 
 
 def test_source_state_change_requires_reason_and_records_transition(client, db) -> None:

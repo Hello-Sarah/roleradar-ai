@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Literal, TypeAlias
+from typing import ClassVar, Literal, TypeAlias
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
@@ -214,6 +214,27 @@ class WatchListCompanyCreate(WatchListCompanyBase):
 
 
 class WatchListCompanyUpdate(BaseModel):
+    non_nullable_fields: ClassVar[frozenset[str]] = frozenset(
+        {
+            "name",
+            "canonical_domain",
+            "company_type",
+            "strategic_priority",
+            "action_window",
+            "target_role_patterns",
+            "target_locations",
+            "positive_keywords",
+            "exclusion_keywords",
+            "location_notes",
+            "work_authorization_notes",
+            "official_source_url",
+            "source_kind",
+            "source_state",
+            "source_state_reason",
+            "rationale",
+        }
+    )
+
     name: str | None = Field(default=None, min_length=1, max_length=200)
     canonical_domain: str | None = Field(default=None, min_length=1, max_length=253)
     company_type: CompanyType | None = None
@@ -232,6 +253,17 @@ class WatchListCompanyUpdate(BaseModel):
     last_verified_at: datetime | None = None
     last_checked_at: datetime | None = None
     rationale: str | None = Field(default=None, min_length=1, max_length=4_000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_nulls(cls, data: object) -> object:
+        if isinstance(data, dict):
+            null_fields = sorted(
+                field for field in cls.non_nullable_fields if data.get(field, ...) is None
+            )
+            if null_fields:
+                raise ValueError(f"Required stored fields cannot be null: {', '.join(null_fields)}")
+        return data
 
     @model_validator(mode="after")
     def validate_source_transition_and_identity(self) -> "WatchListCompanyUpdate":

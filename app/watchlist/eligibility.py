@@ -60,9 +60,9 @@ _STRICT_NEGATIVE_PHRASES = (
 
 
 def _matches_location(location: str, configured: Iterable[str]) -> str | None:
-    folded_location = location.casefold()
+    folded_location = _US_LOCATION.sub("united states", location.casefold())
     for candidate in configured:
-        folded_candidate = candidate.strip().casefold()
+        folded_candidate = _US_LOCATION.sub("united states", candidate.strip().casefold())
         if folded_candidate and (
             folded_candidate in folded_location or folded_location in folded_candidate
         ):
@@ -112,15 +112,21 @@ def _location_status(job: JobLike, profile: ProfileLike) -> tuple[EligibilitySta
     ]
 
 
-def _authorization_status(job: JobLike) -> tuple[EligibilityStatus, list[str]]:
+def _authorization_status(job: JobLike) -> tuple[EligibilityStatus, list[str], bool]:
     evidence_text = f"{job.location}. {job.description}"
     if match := _SPONSORSHIP_AVAILABLE.search(evidence_text):
-        return EligibilityStatus.ELIGIBLE, [match.group(0)]
+        return EligibilityStatus.ELIGIBLE, [match.group(0)], False
     if match := _SPONSORSHIP_RESTRICTED.search(evidence_text):
-        return EligibilityStatus.UNCLEAR, [
-            f"{match.group(0)}; candidate authorization status is not stored."
-        ]
-    return EligibilityStatus.UNCLEAR, ["The job provides no explicit work-authorization evidence."]
+        return (
+            EligibilityStatus.UNCLEAR,
+            [f"{match.group(0)}; candidate authorization status is not stored."],
+            True,
+        )
+    return (
+        EligibilityStatus.UNCLEAR,
+        ["The job provides no explicit work-authorization evidence."],
+        False,
+    )
 
 
 def _strict_filter(description: str) -> tuple[bool, list[str]]:
@@ -144,10 +150,15 @@ def _fit_score(job: JobLike) -> int | None:
 
 
 def _expected_return(
-    location: EligibilityStatus, score: int | None, strict_passed: bool | None
+    location: EligibilityStatus,
+    score: int | None,
+    strict_passed: bool | None,
+    authorization_required_unresolved: bool,
 ) -> ExpectedReturn:
     if location == EligibilityStatus.INELIGIBLE or strict_passed is False:
         return ExpectedReturn.SKIP
+    if authorization_required_unresolved:
+        return ExpectedReturn.RELATIONSHIP_ONLY
     if location == EligibilityStatus.FUTURE:
         return ExpectedReturn.RELOCATE_FIRST
     if location == EligibilityStatus.UNCLEAR or score is None:
@@ -167,7 +178,9 @@ def evaluate_job_eligibility(
     """Classify explicit job/profile evidence without changing the job's score."""
 
     location, location_evidence = _location_status(job, profile)
-    authorization, authorization_evidence = _authorization_status(job)
+    authorization, authorization_evidence, authorization_required_unresolved = (
+        _authorization_status(job)
+    )
     score = _fit_score(job)
     strict_passed: bool | None = None
     job_evidence: list[str] = []
@@ -176,7 +189,9 @@ def evaluate_job_eligibility(
     return JobEligibility(
         location_eligibility=location,
         work_authorization=authorization,
-        expected_return=_expected_return(location, score, strict_passed),
+        expected_return=_expected_return(
+            location, score, strict_passed, authorization_required_unresolved
+        ),
         career_fit_score=score,
         strict_filter_passed=strict_passed,
         location_evidence=location_evidence,
