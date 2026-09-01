@@ -39,7 +39,9 @@ def test_scan_cv_library_adds_and_reuses_fingerprint(db, tmp_path) -> None:
     assert second.documents[0].id == first.documents[0].id
 
 
-def test_scan_preserves_source_bytes_and_never_initializes_a_model(db, tmp_path, monkeypatch) -> None:
+def test_scan_preserves_source_bytes_and_never_initializes_a_model(
+    db, tmp_path, monkeypatch
+) -> None:
     source = tmp_path / "cv-library"
     source.mkdir()
     source_file = source / "main.txt"
@@ -123,7 +125,9 @@ def test_generation_preserves_source_bytes_and_stores_complete_provenance(
         openai_api_key="test-key",
         openai_model="test-model",
     )
-    monkeypatch.setattr("app.services.cv_service._generate_content", lambda *_: _validated_content())
+    monkeypatch.setattr(
+        "app.services.cv_service._generate_content", lambda *_: _validated_content()
+    )
 
     result = generate_tailored_cv(db, job.id, settings)
 
@@ -138,7 +142,10 @@ def test_generation_preserves_source_bytes_and_stores_complete_provenance(
     assert generated.prompt_version
     # SQLite does not round-trip timezone metadata, unlike the production database.
     assert generated.generated_at.replace(tzinfo=UTC) == result.generated_at
-    assert generated.output_hash == hashlib.sha256((output / result.file_name).read_bytes()).hexdigest()
+    assert (
+        generated.output_hash
+        == hashlib.sha256((output / result.file_name).read_bytes()).hexdigest()
+    )
 
 
 def test_unsupported_generation_stops_before_writing_a_file(db, tmp_path, monkeypatch) -> None:
@@ -154,7 +161,9 @@ def test_unsupported_generation_stops_before_writing_a_file(db, tmp_path, monkey
     unsupported = _validated_content().model_copy(
         update={
             "summary": [
-                EvidenceBackedItem(text="Invented executive leadership", source_quote="not in source")
+                EvidenceBackedItem(
+                    text="Invented executive leadership", source_quote="not in source"
+                )
             ]
         }
     )

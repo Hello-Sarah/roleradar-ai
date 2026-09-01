@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 from docx import Document
 from fastapi import HTTPException
@@ -8,7 +6,9 @@ from app.api.routes import download_generated_cv
 from app.config import Settings, get_settings
 
 
-@pytest.mark.parametrize("file_name", ["..%2Foutside.docx", "..%5Coutside.docx", "nested%2Fcv.docx"])
+@pytest.mark.parametrize(
+    "file_name", ["..%2Foutside.docx", "..%5Coutside.docx", "nested%2Fcv.docx"]
+)
 def test_download_rejects_percent_encoded_traversal_and_separators(tmp_path, file_name) -> None:
     with pytest.raises(HTTPException) as error:
         download_generated_cv(file_name, Settings(generated_cv_path=str(tmp_path)))

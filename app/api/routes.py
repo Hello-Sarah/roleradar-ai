@@ -335,6 +335,7 @@ def download_generated_cv(file_name: str, settings: AppSettings) -> FileResponse
         not decoded_file_name
         or Path(decoded_file_name).name != decoded_file_name
         or decoded_file_name in {".", ".."}
+        or "\\" in decoded_file_name
         or "\x00" in decoded_file_name
         or Path(decoded_file_name).suffix.casefold() != ".docx"
     ):

@@ -38,4 +38,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise NotImplementedError("Generated CV provenance is append-only and cannot be safely downgraded.")
+    raise NotImplementedError(
+        "Generated CV provenance is append-only and cannot be safely downgraded."
+    )
