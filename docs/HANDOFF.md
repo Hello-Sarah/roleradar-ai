@@ -12,20 +12,19 @@ artifacts remain in `.superpowers/sdd/2026-08-25-role-radar-v1/`.
 - Repository: `https://github.com/Hello-Sarah/roleradar-ai`
 - Active branch: `codex/roleradar-v1`
 - Persistent worktree: `/Users/shen/Documents/FDE Career Intelligence Agent/.worktrees/roleradar-v1`
-- Latest remote checkpoint at the start of this handoff: `221233a`
-- `221233a` is deliberately labelled WIP. It preserves Task 6 review fixes but is not an accepted
-  Task 6 completion commit.
+- WIP recovery checkpoint: `221233a`
+- Accepted Task 6 implementation and fix head: `128b4f9`
 - Stable demo through accepted Task 5: `f70f979`
 - Implementation plan: `docs/superpowers/plans/2026-08-25-role-radar-v1.md`
 - Detailed execution ledger: `.superpowers/sdd/2026-08-25-role-radar-v1/progress.md`
 
 ## Accepted scope
 
-Tasks 1–5 have passed independent task review and were pushed to GitHub. They cover the database
+Tasks 1–6 have passed independent task review. Tasks 1–5 cover the database
 foundation, bilingual message contracts, deterministic evidence-backed scoring, Watch List, and
-the evidence-grounded CV Library.
+the evidence-grounded CV Library. Task 6 adds the confirmed-action Career Copilot described below.
 
-## Active work: Task 6
+## Completed review: Task 6
 
 Task 6 adds persisted Career Copilot conversations, typed action proposals, mandatory confirmation,
 idempotent execution, workflow records, and non-content audit history. Initial implementation is
@@ -40,12 +39,13 @@ commit `845ceef`. Independent review found no Critical issues and five Important
 
 The reviewer also noted two Minor issues: client-supplied audit actor identity and whitespace-only
 conversation titles. Fixes and regression tests were partially completed before a usage-limit
-interruption and saved in WIP commit `221233a`. Task 6 must not be marked complete until a scoped
-re-review reports every Important finding addressed.
+interruption and saved in WIP commit `221233a`, then completed in `128b4f9`. Scoped independent
+re-review marked all five Important and both Minor findings addressed, with no new Critical or
+Important breakage. The implementer reported 31 focused and 189 full tests passing.
 
 ## Remaining plan
 
-- Task 6: finish fix round, scoped re-review, update ledger, push accepted commit.
+- Task 6: accepted; push the completion and handoff commits and verify the remote hash.
 - Task 7: bilingual Apple-style product UI and visible Copilot confirmation flow.
 - Task 8: decision-first dashboard, daily digest, and weekly hiring trends.
 - Task 9: runnable versioned Eval harness and synthetic/redacted Golden Dataset.
@@ -137,7 +137,8 @@ findings. Then update both the SDD ledger and this document, create a normal com
 1. Open this file and `.superpowers/sdd/2026-08-25-role-radar-v1/progress.md`.
 2. Confirm the active worktree, branch, `git status`, local HEAD, and remote branch hash.
 3. Do not re-dispatch Tasks 1–5; they are already accepted.
-4. Resume Task 6 at fix round 1 scoped re-review unless the ledger records a later clean verdict.
+4. Do not resume Task 6; its scoped re-review is clean. Start Task 7 from the plan after verifying
+   the accepted Task 6 and handoff commits exist on the remote branch.
 5. Never claim Task 9's Eval harness is built until its runner, dataset, graders, CI checks, and
    fresh evidence report exist and pass.
 6. After each accepted task, update this handoff, push GitHub, and verify the remote commit hash.

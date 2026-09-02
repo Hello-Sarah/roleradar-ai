@@ -35,22 +35,22 @@ and GitHub Actions.
 - Local SQLite workflow and Docker Compose PostgreSQL deployment path.
 - CI, linting, formatting, unit/API tests, logging, error handling, and documentation.
 
-## In review
+## Newly accepted
 
 - Task 6 implements persistent local Career Copilot sessions, typed action proposals, mandatory
-  confirmation, workflow records, idempotent execution, and non-content audits. Its initial review
-  found transaction, stale-input, Profile-version, failure-audit, and deleted-target issues.
-- Fixes are preserved in GitHub checkpoint `221233a`, but Task 6 is not accepted until scoped
-  independent re-review is clean. See `docs/HANDOFF.md` for recovery details and lessons learned.
+  confirmation, workflow records, idempotent execution, and non-content audits.
+- Independent review identified transaction, stale-input, Profile-version, failure-audit, and
+  deleted-target issues. Commit `128b4f9` fixed them; scoped re-review marked all findings addressed
+  with no new Critical or Important breakage. See `docs/HANDOFF.md` for recovery details and lessons.
 
-## Last accepted validation snapshot
+## Validation snapshot
 
 - Ruff lint: passed.
 - Ruff format check: passed.
-- Task 5 accepted with 158 passing tests.
-- Task 6 WIP focused suite reached 30 passing tests before re-review; this is progress evidence, not
-  a completion claim.
-- Running API exposes `/api/v1/jobs/from-text`; persisted `/api/v1/copilot/*` remains under review.
+- Task 6 implementer verification: 31 focused tests and 189 full tests passed.
+- Task 6 independent scoped re-review: all 5 Important and 2 Minor findings addressed; no new
+  Critical or Important breakage.
+- Running API exposes `/api/v1/jobs/from-text` and persisted `/api/v1/copilot/*` flows.
 - Local Dashboard returned HTTP 200 at `http://127.0.0.1:8501`.
 
 ## Next recommended milestone
