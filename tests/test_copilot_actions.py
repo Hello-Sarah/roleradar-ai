@@ -599,7 +599,7 @@ def test_post_commit_response_failure_preserves_committed_cv_artifact(
     assert Path(generated.file_path).is_file()
 
 
-@pytest.mark.parametrize("changed_input", ["job", "source_cv"])
+@pytest.mark.parametrize("changed_input", ["job", "source_cv", "source_cv_name"])
 def test_prepared_tailored_cv_rejects_any_changed_provider_input(
     db, tmp_path, monkeypatch, changed_input
 ) -> None:
@@ -660,12 +660,14 @@ def test_prepared_tailored_cv_rejects_any_changed_provider_input(
     )
     if changed_input == "job":
         db.get(Job, job.id).description = "The target job changed after preparation."
-    else:
+    elif changed_input == "source_cv":
         db.get(
             CVDocument, document.id
         ).extracted_text = (
             "The source CV changed without updating its stored ingestion fingerprint."
         )
+    else:
+        db.get(CVDocument, document.id).file_name = "renamed-source.txt"
     db.commit()
 
     try:

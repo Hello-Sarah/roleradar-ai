@@ -361,7 +361,16 @@ def _tailored_cv_job_input_fingerprint(job: Job) -> str:
 
 
 def _cv_input_fingerprint(document: CVDocument) -> str:
-    digest = hashlib.sha256(document.extracted_text.encode("utf-8")).hexdigest()
+    payload = {
+        "id": document.id,
+        "file_name": document.file_name,
+        "extracted_text": document.extracted_text,
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
     return f"tailored-cv-source-input-sha256:{digest}"
 
 
