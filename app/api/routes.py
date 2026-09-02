@@ -574,7 +574,6 @@ def confirm_copilot_proposal(
             payload.idempotency_key,
             db,
             settings,
-            actor=payload.actor,
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc

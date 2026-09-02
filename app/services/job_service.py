@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -50,6 +52,7 @@ class DuplicateJobError(ValueError):
 class PreparedJobAnalysis:
     job_id: int
     expected_analysis_id: int | None
+    provider_input_fingerprint: str
     profile_id: int
     profile_version: str
     values: dict[str, object]
@@ -189,6 +192,19 @@ def _classification_snapshot(job: Job) -> ClassificationRead:
     )
 
 
+def _analysis_input_fingerprint(job: JobCreate, classification: ClassificationRead) -> str:
+    payload = {
+        "job": job.model_dump(mode="json"),
+        "classification": classification.model_dump(mode="json"),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return f"analysis-input-sha256:{digest}"
+
+
 def _build_analysis(
     db: Session, job: Job, profile: CandidateProfile, settings: Settings
 ) -> JobAnalysis:
@@ -224,6 +240,7 @@ def prepare_reanalysis(db: Session, job_id: int, settings: Settings) -> Prepared
     return PreparedJobAnalysis(
         job_id=job_id,
         expected_analysis_id=expected_analysis_id,
+        provider_input_fingerprint=_analysis_input_fingerprint(job_snapshot, classification),
         profile_id=profile_snapshot.id,
         profile_version=profile_version,
         values=values,
@@ -235,6 +252,11 @@ def persist_prepared_reanalysis(db: Session, prepared: PreparedJobAnalysis) -> J
     current_analysis_id = job.analysis.id if job.analysis else None
     if current_analysis_id != prepared.expected_analysis_id:
         raise ValueError("The job analysis changed while reanalysis was being prepared")
+    current_input_fingerprint = _analysis_input_fingerprint(
+        _job_create_snapshot(job), _classification_snapshot(job)
+    )
+    if current_input_fingerprint != prepared.provider_input_fingerprint:
+        raise ValueError("The job analysis inputs changed while reanalysis was being prepared")
     profile = db.get(CandidateProfile, prepared.profile_id)
     if profile is None:
         raise ValueError("The candidate profile changed while reanalysis was being prepared")

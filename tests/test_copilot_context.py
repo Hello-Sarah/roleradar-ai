@@ -79,3 +79,34 @@ def test_opening_context_does_not_initialize_or_call_a_model(db, monkeypatch) ->
     context = build_context(ContextSelection(job_id=job.id), db)
 
     assert context.job.id == job.id
+
+
+def test_profile_context_version_matches_the_exact_mutable_payload_without_writing(db) -> None:
+    from app.copilot.context import ContextSelection, build_context
+    from app.database.models import CandidateProfileVersion
+    from app.services.profile_service import (
+        get_or_create_profile,
+        get_or_create_profile_version,
+        profile_content_version,
+    )
+
+    profile = get_or_create_profile(db)
+    historical = get_or_create_profile_version(db, profile)
+    db.commit()
+    profile.target_roles = [*profile.target_roles, "Solutions Architect"]
+    db.commit()
+    current_version = profile_content_version(profile)
+    before_version_rows = db.query(CandidateProfileVersion).count()
+
+    context = build_context(ContextSelection(), db)
+
+    assert context.profile is not None
+    assert context.profile.target_roles[-1] == "Solutions Architect"
+    assert context.profile.version == current_version
+    assert context.profile.version != historical.version
+    assert context.profile.version_id is None
+    profile_source = next(
+        source for source in context.sources if source.record_type == "candidate_profile"
+    )
+    assert profile_source.version == current_version
+    assert db.query(CandidateProfileVersion).count() == before_version_rows

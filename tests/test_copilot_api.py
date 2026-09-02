@@ -91,18 +91,45 @@ def test_context_preview_and_proposal_confirmation_api(client: TestClient, db) -
     assert preview["side_effects"]
     assert preview["private_data_usage"]["included"] is False
 
+    spoofed = client.post(
+        f"/api/v1/copilot/proposals/{preview['id']}/confirm",
+        json={"idempotency_key": "spoofed-actor", "actor": "admin"},
+    )
+    assert spoofed.status_code == 422
+    assert db.query(CopilotActionAudit).count() == 0
+
     confirmed = client.post(
         f"/api/v1/copilot/proposals/{preview['id']}/confirm",
-        json={"idempotency_key": "api-confirm-once", "actor": "user"},
+        json={"idempotency_key": "api-confirm-once"},
     )
     repeated = client.post(
         f"/api/v1/copilot/proposals/{preview['id']}/confirm",
-        json={"idempotency_key": "api-confirm-once", "actor": "user"},
+        json={"idempotency_key": "api-confirm-once"},
     )
 
     assert confirmed.status_code == 200
     assert repeated.json() == confirmed.json()
     assert client.get(f"/api/v1/jobs/{job.id}").json()["status"] == "Saved"
+    assert db.query(CopilotActionAudit).one().actor == "local_user"
+
+
+def test_session_titles_are_trimmed_and_blank_titles_are_rejected(client: TestClient, db) -> None:
+    created = client.post(
+        "/api/v1/copilot/sessions", json={"title": "  Focused search  ", "locale": "en"}
+    )
+    assert created.status_code == 201
+    assert created.json()["title"] == "Focused search"
+    session_id = created.json()["id"]
+
+    blank_create = client.post("/api/v1/copilot/sessions", json={"title": "   ", "locale": "en"})
+    blank_rename = client.patch(f"/api/v1/copilot/sessions/{session_id}", json={"title": "\t  "})
+
+    assert blank_create.status_code == 422
+    assert blank_rename.status_code == 422
+    db.expire_all()
+    from app.database.models import CopilotSession
+
+    assert db.get(CopilotSession, session_id).title == "Focused search"
 
 
 def test_api_rejects_forbidden_or_malformed_proposal_without_writes(client: TestClient, db) -> None:

@@ -35,6 +35,7 @@ from app.database.models import (
 )
 from app.schemas import ApplicationEventCreate, ApplicationStatus
 from app.services.cv_service import (
+    CVLibraryError,
     PreparedTailoredCV,
     discard_prepared_tailored_cv,
     persist_prepared_tailored_cv,
@@ -59,12 +60,15 @@ from app.workflows.service import (
     complete_workflow_run,
     complete_workflow_step,
     create_workflow_run,
+    fail_workflow_run,
+    fail_workflow_step,
     start_workflow_run,
     start_workflow_step,
 )
 
 logger = logging.getLogger(__name__)
 _PROPOSAL_ADAPTER = TypeAdapter(ActionProposal)
+_LOCAL_ACTOR = "local_user"
 
 
 class ActionProposalError(ValueError):
@@ -323,6 +327,88 @@ def _result_from_audit(audit: CopilotActionAudit) -> ActionResult:
     )
 
 
+def _safe_error_code(exc: Exception) -> str:
+    if isinstance(exc, ActionConflictError):
+        return "action_conflict"
+    if isinstance(exc, ActionProposalError):
+        return "invalid_action"
+    if isinstance(exc, CVLibraryError):
+        return "cv_generation_failed"
+    if isinstance(exc, LookupError):
+        return "target_not_found"
+    if isinstance(exc, IntegrityError):
+        return "database_conflict"
+    return "action_execution_failed"
+
+
+def _persist_failed_confirmation(
+    db: Session,
+    *,
+    session_id: int,
+    proposal_id: int,
+    proposal_type: str,
+    proposal_version: str,
+    target_type: str,
+    target_id: int | None,
+    idempotency_key: str,
+    actor: str,
+    error_code: str,
+) -> None:
+    """Append failure observability after the business transaction has rolled back."""
+    try:
+        audit = CopilotActionAudit(
+            session_id=session_id,
+            proposal_id=None,
+            proposal_type=proposal_type,
+            proposal_version=proposal_version,
+            parameter_summary={
+                "proposal_id": proposal_id,
+                "target_type": target_type,
+                "target_id": target_id,
+            },
+            confirmed_at=datetime.now(UTC),
+            actor=actor,
+            result_record_ids={},
+            idempotency_key=idempotency_key,
+            error_state=error_code,
+        )
+        db.add(audit)
+        db.flush()
+        run = create_workflow_run(
+            db,
+            WorkflowRunCreate(
+                workflow_type="copilot_confirmed_action",
+                contract_version=proposal_version,
+                input_reference=f"copilot_proposal:{proposal_id}",
+            ),
+            commit=False,
+        )
+        start_workflow_run(db, run, commit=False)
+        step = add_workflow_step(
+            db,
+            run,
+            WorkflowStepCreate(
+                step_name=proposal_type,
+                version=proposal_version,
+                input_reference=f"copilot_proposal:{proposal_id}",
+            ),
+            commit=False,
+        )
+        start_workflow_step(db, step, commit=False)
+        fail_workflow_step(db, step, error_code, commit=False)
+        fail_workflow_run(db, run, error_code, commit=False)
+        db.commit()
+    except IntegrityError:
+        # A concurrent attempt with the same idempotency key already recorded the failure.
+        db.rollback()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "failed to persist Copilot failure observability",
+            extra={"proposal_id": proposal_id, "error_code": error_code},
+        )
+
+
 def _execute(
     db: Session,
     record: CopilotActionProposal,
@@ -428,6 +514,8 @@ def _execute(
         return {"job": [job.id], "generated_cv": [generated.id]}, artifact_path
     if isinstance(proposal, CreateActionItemProposal):
         _assert_snapshot(record, {})
+        if proposal.target_id is not None:
+            _job(db, proposal.target_id)
         item = CopilotActionItem(
             job_id=proposal.target_id,
             item_kind=proposal.item_kind,
@@ -446,15 +534,19 @@ def confirm_action(
     idempotency_key: str,
     db: Session,
     settings: Settings,
-    *,
-    actor: str = "user",
 ) -> ActionResult:
     existing = db.scalar(
         select(CopilotActionAudit).where(CopilotActionAudit.idempotency_key == idempotency_key)
     )
     if existing is not None:
-        if existing.proposal_id != proposal_id:
+        existing_proposal_id = existing.proposal_id or existing.parameter_summary.get("proposal_id")
+        if existing_proposal_id != proposal_id:
             raise ActionConflictError("The idempotency key belongs to another proposal")
+        if existing.error_state is not None:
+            raise ActionConflictError(
+                f"The previous confirmation attempt failed ({existing.error_state}); "
+                "retry with a new idempotency key"
+            )
         return _result_from_audit(existing)
 
     record = db.scalar(
@@ -475,38 +567,56 @@ def confirm_action(
         raise ActionConflictError("Action proposal is no longer pending")
 
     proposal = _PROPOSAL_ADAPTER.validate_python(record.parameters)
+    failure_metadata = {
+        "session_id": record.session_id,
+        "proposal_id": record.id,
+        "proposal_type": record.proposal_type,
+        "proposal_version": record.proposal_version,
+        "target_type": record.target_type,
+        "target_id": record.target_id,
+        "idempotency_key": idempotency_key,
+        "actor": _LOCAL_ACTOR,
+    }
     prepared_analysis = None
     prepared_cv = None
-    if isinstance(proposal, ReanalyzeJobProposal):
-        prepared_analysis = prepare_reanalysis(db, proposal.target_id, settings)
-    elif isinstance(proposal, GenerateTailoredCVProposal):
-        prepared_cv = prepare_tailored_cv(
-            db,
-            proposal.target_id,
-            settings,
-            source_cv_ids=proposal.source_cv_ids,
-        )
-    if prepared_analysis is not None or prepared_cv is not None:
-        record = db.scalar(
-            select(CopilotActionProposal)
-            .where(CopilotActionProposal.id == proposal_id)
-            .with_for_update()
-        )
-        if record is not None and record.status == "confirmed":
-            if prepared_cv is not None:
-                discard_prepared_tailored_cv(prepared_cv)
-            audit = db.scalar(
-                select(CopilotActionAudit).where(CopilotActionAudit.proposal_id == proposal_id)
+    try:
+        if isinstance(proposal, ReanalyzeJobProposal):
+            prepared_analysis = prepare_reanalysis(db, proposal.target_id, settings)
+        elif isinstance(proposal, GenerateTailoredCVProposal):
+            prepared_cv = prepare_tailored_cv(
+                db,
+                proposal.target_id,
+                settings,
+                source_cv_ids=proposal.source_cv_ids,
             )
-            if audit is not None:
-                return _result_from_audit(audit)
-        if record is None or record.status != "pending":
-            if prepared_cv is not None:
-                discard_prepared_tailored_cv(prepared_cv)
-            raise ActionConflictError("Action proposal is no longer pending")
+        if prepared_analysis is not None or prepared_cv is not None:
+            record = db.scalar(
+                select(CopilotActionProposal)
+                .where(CopilotActionProposal.id == proposal_id)
+                .with_for_update()
+            )
+            if record is not None and record.status == "confirmed":
+                if prepared_cv is not None:
+                    discard_prepared_tailored_cv(prepared_cv)
+                audit = db.scalar(
+                    select(CopilotActionAudit).where(CopilotActionAudit.proposal_id == proposal_id)
+                )
+                if audit is not None:
+                    return _result_from_audit(audit)
+            if record is None or record.status != "pending":
+                if prepared_cv is not None:
+                    discard_prepared_tailored_cv(prepared_cv)
+                raise ActionConflictError("Action proposal is no longer pending")
+    except Exception as exc:
+        db.rollback()
+        if prepared_cv is not None:
+            discard_prepared_tailored_cv(prepared_cv)
+        _persist_failed_confirmation(db, **failure_metadata, error_code=_safe_error_code(exc))
+        raise
     artifact_path: Path | None = None
     if prepared_cv is not None:
         artifact_path = Path(prepared_cv.file_path)
+    committed = False
     try:
         audit = CopilotActionAudit(
             session_id=record.session_id,
@@ -520,7 +630,7 @@ def confirm_action(
                 "private_record_ids": record.private_data_usage.get("record_ids", []),
             },
             confirmed_at=datetime.now(UTC),
-            actor=actor,
+            actor=_LOCAL_ACTOR,
             result_record_ids={},
             idempotency_key=idempotency_key,
             error_state=None,
@@ -574,6 +684,7 @@ def confirm_action(
             commit=False,
         )
         db.commit()
+        committed = True
         db.refresh(audit)
         logger.info(
             "copilot action confirmed",
@@ -581,6 +692,8 @@ def confirm_action(
         )
         return _result_from_audit(audit)
     except IntegrityError:
+        if committed:
+            raise
         db.rollback()
         if prepared_cv is not None:
             discard_prepared_tailored_cv(prepared_cv)
@@ -598,11 +711,14 @@ def confirm_action(
                     "The idempotency key belongs to another proposal"
                 ) from None
             return _result_from_audit(winner)
+        _persist_failed_confirmation(db, **failure_metadata, error_code="database_conflict")
         raise
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        if prepared_cv is not None:
-            discard_prepared_tailored_cv(prepared_cv)
-        elif artifact_path is not None:
-            artifact_path.unlink(missing_ok=True)
+        if not committed:
+            if prepared_cv is not None:
+                discard_prepared_tailored_cv(prepared_cv)
+            elif artifact_path is not None:
+                artifact_path.unlink(missing_ok=True)
+            _persist_failed_confirmation(db, **failure_metadata, error_code=_safe_error_code(exc))
         raise

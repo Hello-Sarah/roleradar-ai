@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from app.config import Settings
 from app.database.models import ApplicationEvent, Job
@@ -131,7 +132,7 @@ def test_proposal_creation_writes_no_business_rows_and_confirmation_is_idempoten
 def test_confirmation_revalidates_current_state_before_any_write(db) -> None:
     from app.copilot.actions import ActionConflictError, confirm_action, create_action_proposal
     from app.copilot.contracts import ChangeApplicationStatusProposal
-    from app.database.models import CopilotActionAudit
+    from app.database.models import CopilotActionAudit, WorkflowRun
 
     job = _job(db)
     proposal = create_action_proposal(
@@ -152,7 +153,76 @@ def test_confirmation_revalidates_current_state_before_any_write(db) -> None:
     db.refresh(job)
     assert job.status == "Interview"
     assert db.query(ApplicationEvent).count() == 0
-    assert db.query(CopilotActionAudit).count() == 0
+    failure = db.query(CopilotActionAudit).one()
+    assert failure.proposal_id is None
+    assert failure.parameter_summary["proposal_id"] == proposal.id
+    assert failure.error_state == "action_conflict"
+    workflow = db.query(WorkflowRun).one()
+    assert workflow.status == "failed"
+    assert workflow.error_code == "action_conflict"
+    assert workflow.steps[0].status == "failed"
+
+
+def test_provider_failure_persists_safe_failed_audit_and_workflow(db, monkeypatch) -> None:
+    from app.copilot import actions as action_module
+    from app.copilot.actions import ActionConflictError, confirm_action, create_action_proposal
+    from app.copilot.contracts import ReanalyzeJobProposal
+    from app.database.models import CopilotActionAudit, WorkflowRun
+    from app.schemas import JobCreate
+    from app.services.job_service import create_and_analyze_job
+
+    settings = Settings(ai_explanations_enabled=False)
+    job = create_and_analyze_job(
+        db,
+        JobCreate(
+            company="Failure AI",
+            title="Applied AI Engineer",
+            location="Hong Kong",
+            description="Build reliable applied AI systems using Python and SQL.",
+            source="manual",
+        ),
+        settings,
+    )
+    analysis_count = len(job.analyses)
+    proposal = create_action_proposal(
+        db,
+        session_id=_session(db).id,
+        proposal=ReanalyzeJobProposal(target_id=job.id, analysis_id=job.analysis.id),
+    )
+    original_prepare = action_module.prepare_reanalysis
+    monkeypatch.setattr(
+        action_module,
+        "prepare_reanalysis",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("private provider detail")),
+    )
+
+    with pytest.raises(RuntimeError, match="private provider detail"):
+        confirm_action(proposal.id, "provider-failure", db, settings)
+
+    db.refresh(job)
+    assert len(job.analyses) == analysis_count
+    failure = db.query(CopilotActionAudit).one()
+    assert failure.proposal_id is None
+    assert failure.parameter_summary["proposal_id"] == proposal.id
+    assert failure.error_state == "action_execution_failed"
+    assert "private provider detail" not in str(failure.parameter_summary)
+    workflow = db.query(WorkflowRun).one()
+    assert workflow.status == "failed"
+    assert workflow.error_code == "action_execution_failed"
+    assert workflow.steps[0].status == "failed"
+    assert workflow.steps[0].error_code == "action_execution_failed"
+
+    with pytest.raises(ActionConflictError, match="previous confirmation attempt failed"):
+        confirm_action(proposal.id, "provider-failure", db, settings)
+    monkeypatch.setattr(action_module, "prepare_reanalysis", original_prepare)
+    retried = confirm_action(proposal.id, "provider-retry", db, settings)
+
+    assert retried.error_state is None
+    assert db.query(CopilotActionAudit).count() == 2
+    assert [run.status for run in db.query(WorkflowRun).order_by(WorkflowRun.id)] == [
+        "failed",
+        "succeeded",
+    ]
 
 
 def test_proposal_rejects_a_model_snapshot_that_does_not_match_current_state(db) -> None:
@@ -322,6 +392,43 @@ def test_reanalysis_explanation_runs_outside_database_transaction(db, monkeypatc
     assert result.result_record_ids["analysis"] != [existing_analysis_id]
 
 
+@pytest.mark.parametrize("changed_input", ["job", "classification"])
+def test_prepared_reanalysis_rejects_any_changed_provider_input(db, changed_input) -> None:
+    from app.schemas import JobCreate
+    from app.services.job_service import (
+        create_and_analyze_job,
+        persist_prepared_reanalysis,
+        prepare_reanalysis,
+    )
+
+    settings = Settings(ai_explanations_enabled=False)
+    job = create_and_analyze_job(
+        db,
+        JobCreate(
+            company="Snapshot AI",
+            title="Applied AI Engineer",
+            location="Hong Kong",
+            description="Build applied AI systems for customers using Python and SQL.",
+            source="manual",
+        ),
+        settings,
+    )
+    analysis_count = len(job.analyses)
+    prepared = prepare_reanalysis(db, job.id, settings)
+    current = db.get(Job, job.id)
+    if changed_input == "job":
+        current.description = "This description changed after provider preparation."
+    else:
+        current.classification.evidence = ["Changed classification evidence"]
+    db.commit()
+
+    with pytest.raises(ValueError, match="inputs changed"):
+        persist_prepared_reanalysis(db, prepared)
+
+    db.rollback()
+    assert len(db.get(Job, job.id).analyses) == analysis_count
+
+
 def test_tailored_cv_model_and_file_generation_run_outside_database_transaction(
     db, tmp_path, monkeypatch
 ) -> None:
@@ -398,6 +505,176 @@ def test_tailored_cv_model_and_file_generation_run_outside_database_transaction(
     )
 
     assert result.result_record_ids["generated_cv"]
+
+
+@pytest.mark.parametrize(
+    "response_error",
+    [
+        RuntimeError("response refresh failed"),
+        pytest.param(
+            IntegrityError("response refresh failed", {}, RuntimeError("refresh")),
+            id="integrity-error",
+        ),
+    ],
+)
+def test_post_commit_response_failure_preserves_committed_cv_artifact(
+    db, tmp_path, monkeypatch, response_error
+) -> None:
+    from pathlib import Path
+
+    from app.copilot.actions import confirm_action, create_action_proposal
+    from app.copilot.contracts import GenerateTailoredCVProposal
+    from app.database.models import CopilotActionAudit, CVDocument, GeneratedCV
+    from app.services.cv_service import (
+        EvidenceBackedItem,
+        TailoredCVContent,
+        TailoredCVSection,
+    )
+
+    job = _job(db)
+    document = CVDocument(
+        file_path=str(tmp_path / "source.txt"),
+        file_name="source.txt",
+        file_type="txt",
+        fingerprint="post-commit-source-fingerprint",
+        modified_at=datetime.now(UTC),
+        extracted_text=(
+            "Jane Doe\nApplied AI Engineer\n"
+            "Built reliable Python APIs for banking customers.\nPython"
+        ),
+        active=True,
+    )
+    db.add(document)
+    db.commit()
+    content = TailoredCVContent(
+        name=EvidenceBackedItem(text="Jane Doe", source_quote="Jane Doe"),
+        headline=EvidenceBackedItem(text="Applied AI Engineer", source_quote="Applied AI Engineer"),
+        summary=[
+            EvidenceBackedItem(
+                text="Built reliable Python APIs for banking customers.",
+                source_quote="Built reliable Python APIs for banking customers.",
+            )
+        ],
+        skills=[EvidenceBackedItem(text="Python", source_quote="Python")],
+        sections=[
+            TailoredCVSection(
+                title="Experience",
+                items=[
+                    EvidenceBackedItem(
+                        text="Built reliable Python APIs for banking customers.",
+                        source_quote="Built reliable Python APIs for banking customers.",
+                    )
+                ],
+            )
+        ],
+    )
+    monkeypatch.setattr("app.services.cv_service._generate_content", lambda *_: content)
+    proposal = create_action_proposal(
+        db,
+        session_id=_session(db).id,
+        proposal=GenerateTailoredCVProposal(
+            target_id=job.id,
+            source_cv_ids=[document.id],
+        ),
+    )
+    original_refresh = db.refresh
+
+    def fail_post_commit_audit_refresh(instance, *args, **kwargs):
+        if isinstance(instance, CopilotActionAudit):
+            raise response_error
+        return original_refresh(instance, *args, **kwargs)
+
+    monkeypatch.setattr(db, "refresh", fail_post_commit_audit_refresh)
+
+    with pytest.raises(type(response_error), match="response refresh failed"):
+        confirm_action(
+            proposal.id,
+            "post-commit-cv",
+            db,
+            Settings(generated_cv_path=str(tmp_path / "generated")),
+        )
+
+    generated = db.query(GeneratedCV).one()
+    assert db.query(CopilotActionAudit).count() == 1
+    assert Path(generated.file_path).is_file()
+
+
+@pytest.mark.parametrize("changed_input", ["job", "source_cv"])
+def test_prepared_tailored_cv_rejects_any_changed_provider_input(
+    db, tmp_path, monkeypatch, changed_input
+) -> None:
+    from app.database.models import CVDocument, GeneratedCV
+    from app.services.cv_service import (
+        CVLibraryError,
+        EvidenceBackedItem,
+        TailoredCVContent,
+        TailoredCVSection,
+        discard_prepared_tailored_cv,
+        persist_prepared_tailored_cv,
+        prepare_tailored_cv,
+    )
+
+    job = _job(db)
+    document = CVDocument(
+        file_path=str(tmp_path / "snapshot-source.txt"),
+        file_name="snapshot-source.txt",
+        file_type="txt",
+        fingerprint="unchanged-stored-fingerprint",
+        modified_at=datetime.now(UTC),
+        extracted_text=(
+            "Jane Doe\nApplied AI Engineer\n"
+            "Built reliable Python APIs for banking customers.\nPython"
+        ),
+        active=True,
+    )
+    db.add(document)
+    db.commit()
+    content = TailoredCVContent(
+        name=EvidenceBackedItem(text="Jane Doe", source_quote="Jane Doe"),
+        headline=EvidenceBackedItem(text="Applied AI Engineer", source_quote="Applied AI Engineer"),
+        summary=[
+            EvidenceBackedItem(
+                text="Built reliable Python APIs for banking customers.",
+                source_quote="Built reliable Python APIs for banking customers.",
+            )
+        ],
+        skills=[EvidenceBackedItem(text="Python", source_quote="Python")],
+        sections=[
+            TailoredCVSection(
+                title="Experience",
+                items=[
+                    EvidenceBackedItem(
+                        text="Built reliable Python APIs for banking customers.",
+                        source_quote="Built reliable Python APIs for banking customers.",
+                    )
+                ],
+            )
+        ],
+    )
+    monkeypatch.setattr("app.services.cv_service._generate_content", lambda *_: content)
+    prepared = prepare_tailored_cv(
+        db,
+        job.id,
+        Settings(generated_cv_path=str(tmp_path / "generated")),
+        source_cv_ids=[document.id],
+    )
+    if changed_input == "job":
+        db.get(Job, job.id).description = "The target job changed after preparation."
+    else:
+        db.get(
+            CVDocument, document.id
+        ).extracted_text = (
+            "The source CV changed without updating its stored ingestion fingerprint."
+        )
+    db.commit()
+
+    try:
+        with pytest.raises(CVLibraryError, match="input.*changed|evidence changed"):
+            persist_prepared_tailored_cv(db, prepared)
+    finally:
+        discard_prepared_tailored_cv(prepared)
+
+    assert db.query(GeneratedCV).count() == 0
 
 
 def test_concurrent_confirmation_executes_one_business_transaction(tmp_path) -> None:
@@ -574,6 +851,44 @@ def test_all_deterministic_allowed_actions_execute_through_domain_boundaries(db)
     assert [item.next_follow_up_date for item in job.application_events if item.next_follow_up_date]
     assert db.get(WatchListCompany, company_id).strategic_priority == "core_target"
     assert db.query(CopilotActionItem).one().title == "Follow up with the hiring team"
+
+
+def test_action_item_confirmation_rejects_a_target_deleted_after_proposal(db) -> None:
+    from app.copilot.actions import ActionProposalError, confirm_action, create_action_proposal
+    from app.copilot.contracts import CreateActionItemProposal
+    from app.database.models import CopilotActionAudit, CopilotActionItem, WorkflowRun
+
+    job = _job(db)
+    proposal = create_action_proposal(
+        db,
+        session_id=_session(db).id,
+        proposal=CreateActionItemProposal(
+            target_id=job.id,
+            item_kind="learning",
+            title="Practice architecture interviews",
+        ),
+    )
+    db.delete(job)
+    db.commit()
+
+    with pytest.raises(ActionProposalError, match="does not exist"):
+        confirm_action(proposal.id, "deleted-action-item-target", db, Settings())
+
+    assert db.query(CopilotActionItem).count() == 0
+    failure = db.query(CopilotActionAudit).one()
+    assert failure.error_state == "invalid_action"
+    assert db.query(WorkflowRun).one().status == "failed"
+
+
+def test_sqlite_connections_enforce_foreign_keys() -> None:
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine("sqlite://")
+    try:
+        with engine.connect() as connection:
+            assert connection.scalar(text("PRAGMA foreign_keys")) == 1
+    finally:
+        engine.dispose()
 
 
 def test_persisted_workflow_step_can_fail_and_retry_independently(db) -> None:

@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StringConstraints
 
 from app.schemas import (
     ActionItemKind,
@@ -13,6 +13,10 @@ from app.schemas import (
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list[JsonScalar] | dict[str, JsonScalar]
+SessionTitle = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=200),
+]
 
 
 class StrictContract(BaseModel):
@@ -160,16 +164,15 @@ class ActionIntentRequest(StrictContract):
 
 class ActionConfirmRequest(StrictContract):
     idempotency_key: str = Field(min_length=1, max_length=200)
-    actor: str = Field(default="user", min_length=1, max_length=100)
 
 
 class CopilotSessionCreate(StrictContract):
-    title: str = Field(default="New conversation", min_length=1, max_length=200)
+    title: SessionTitle = "New conversation"
     locale: Locale = "en"
 
 
 class CopilotSessionUpdate(StrictContract):
-    title: str = Field(min_length=1, max_length=200)
+    title: SessionTitle
 
 
 class CopilotSessionRead(StrictContract):

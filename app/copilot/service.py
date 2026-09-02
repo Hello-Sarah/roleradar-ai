@@ -47,6 +47,13 @@ class CopilotSessionError(ValueError):
     pass
 
 
+def _normalized_title(title: str) -> str:
+    normalized = title.strip()
+    if not normalized:
+        raise CopilotSessionError("A conversation title cannot be blank")
+    return normalized
+
+
 def _session_query():
     return select(CopilotSession).options(selectinload(CopilotSession.messages))
 
@@ -61,7 +68,7 @@ def get_session(db: Session, session_id: int, *, include_deleted: bool = False) 
 def create_session(
     db: Session, *, title: str = "New conversation", locale: str = "en"
 ) -> CopilotSession:
-    session = CopilotSession(title=title.strip(), locale=locale)
+    session = CopilotSession(title=_normalized_title(title), locale=locale)
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -80,7 +87,7 @@ def list_sessions(db: Session) -> list[CopilotSession]:
 
 def rename_session(db: Session, session_id: int, title: str) -> CopilotSession:
     session = get_session(db, session_id)
-    session.title = title.strip()
+    session.title = _normalized_title(title)
     db.commit()
     db.refresh(session)
     return session

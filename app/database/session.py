@@ -1,8 +1,10 @@
+import sqlite3
 from collections.abc import Generator
 from pathlib import Path
 
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, event, inspect
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from alembic import command
@@ -15,6 +17,14 @@ class Base(DeclarativeBase):
 
 def _connect_args(url: str) -> dict[str, bool]:
     return {"check_same_thread": False} if url.startswith("sqlite") else {}
+
+
+@event.listens_for(Engine, "connect")
+def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+    if isinstance(dbapi_connection, sqlite3.Connection):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 settings = get_settings()

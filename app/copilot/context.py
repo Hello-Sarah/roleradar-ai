@@ -1,7 +1,7 @@
 from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import desc, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.copilot.contracts import PrivateDataUsage
@@ -14,6 +14,7 @@ from app.database.models import (
     JobAnalysis,
     WatchListCompany,
 )
+from app.services.profile_service import profile_content_version
 
 
 class ContextSelection(BaseModel):
@@ -122,17 +123,20 @@ def _selected_job(db: Session, job_id: int) -> Job:
     return job
 
 
-def _active_profile(db: Session) -> tuple[CandidateProfile, CandidateProfileVersion | None] | None:
+def _active_profile(
+    db: Session,
+) -> tuple[CandidateProfile, CandidateProfileVersion | None, str] | None:
     profile = db.scalar(select(CandidateProfile).order_by(CandidateProfile.id).limit(1))
     if profile is None:
         return None
+    content_version = profile_content_version(profile)
     version = db.scalar(
-        select(CandidateProfileVersion)
-        .where(CandidateProfileVersion.profile_id == profile.id)
-        .order_by(desc(CandidateProfileVersion.id))
-        .limit(1)
+        select(CandidateProfileVersion).where(
+            CandidateProfileVersion.profile_id == profile.id,
+            CandidateProfileVersion.version == content_version,
+        )
     )
-    return profile, version
+    return profile, version, content_version
 
 
 def build_context(selection: ContextSelection, db: Session) -> CopilotContext:
@@ -223,11 +227,11 @@ def build_context(selection: ContextSelection, db: Session) -> CopilotContext:
     context_profile = None
     profile_pair = _active_profile(db)
     if profile_pair is not None:
-        profile, version = profile_pair
+        profile, version, content_version = profile_pair
         context_profile = ContextProfile(
             id=profile.id,
             version_id=version.id if version else None,
-            version=version.version if version else None,
+            version=content_version,
             target_roles=profile.target_roles,
             preferred_locations=profile.preferred_locations,
             future_locations=profile.future_locations,
@@ -239,7 +243,7 @@ def build_context(selection: ContextSelection, db: Session) -> CopilotContext:
             ContextSource(
                 record_type="candidate_profile",
                 record_id=profile.id,
-                version=version.version if version else None,
+                version=content_version,
             )
         )
 

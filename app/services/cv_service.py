@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import re
 import uuid
@@ -64,12 +65,13 @@ class ScanCounters:
 @dataclass(frozen=True)
 class PreparedTailoredCV:
     job_id: int
-    job_fingerprint: str
+    job_input_fingerprint: str
     file_name: str
     file_path: str
     output_hash: str
     source_cv_ids: list[int]
     source_cv_hashes: dict[str, str]
+    source_cv_input_fingerprints: dict[str, str]
     model_version: str
     prompt_version: str
     generated_at: datetime
@@ -344,6 +346,25 @@ def _job_snapshot(job: Job) -> Job:
     )
 
 
+def _tailored_cv_job_input_fingerprint(job: Job) -> str:
+    payload = {
+        "company": job.company,
+        "title": job.title,
+        "description": job.description,
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return f"tailored-cv-job-input-sha256:{digest}"
+
+
+def _cv_input_fingerprint(document: CVDocument) -> str:
+    digest = hashlib.sha256(document.extracted_text.encode("utf-8")).hexdigest()
+    return f"tailored-cv-source-input-sha256:{digest}"
+
+
 def prepare_tailored_cv(
     db: Session,
     job_id: int,
@@ -392,13 +413,16 @@ def prepare_tailored_cv(
         raise
     return PreparedTailoredCV(
         job_id=job_snapshot.id,
-        job_fingerprint=job_snapshot.fingerprint,
+        job_input_fingerprint=_tailored_cv_job_input_fingerprint(job_snapshot),
         file_name=file_name,
         file_path=str(output),
         output_hash=output_hash,
         source_cv_ids=[document.id for document in document_snapshots],
         source_cv_hashes={
             str(document.id): document.fingerprint for document in document_snapshots
+        },
+        source_cv_input_fingerprints={
+            str(document.id): _cv_input_fingerprint(document) for document in document_snapshots
         },
         model_version=settings.openai_model,
         prompt_version=CV_PROMPT_VERSION,
@@ -415,8 +439,8 @@ def discard_prepared_tailored_cv(prepared: PreparedTailoredCV) -> None:
 
 def persist_prepared_tailored_cv(db: Session, prepared: PreparedTailoredCV) -> GeneratedCVRead:
     job = db.get(Job, prepared.job_id)
-    if job is None or job.fingerprint != prepared.job_fingerprint:
-        raise CVLibraryError("The target job changed while CV generation was being prepared")
+    if job is None or _tailored_cv_job_input_fingerprint(job) != prepared.job_input_fingerprint:
+        raise CVLibraryError("The target job input changed while CV generation was being prepared")
     documents = list(
         db.scalars(
             select(CVDocument).where(
@@ -426,6 +450,11 @@ def persist_prepared_tailored_cv(db: Session, prepared: PreparedTailoredCV) -> G
     )
     current_hashes = {str(document.id): document.fingerprint for document in documents}
     if current_hashes != prepared.source_cv_hashes:
+        raise CVLibraryError("Source CV evidence changed while generation was being prepared")
+    current_input_fingerprints = {
+        str(document.id): _cv_input_fingerprint(document) for document in documents
+    }
+    if current_input_fingerprints != prepared.source_cv_input_fingerprints:
         raise CVLibraryError("Source CV evidence changed while generation was being prepared")
     generated = GeneratedCV(
         job_id=prepared.job_id,
