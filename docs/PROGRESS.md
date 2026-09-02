@@ -1,6 +1,6 @@
 # RoleRadar AI — Project Progress
 
-Last updated: 2026-08-25
+Last updated: 2026-09-03
 
 ## Current status
 
@@ -29,24 +29,28 @@ and GitHub Actions.
   handling, and support for DOCX, text-layer PDF, and TXT sources.
 - Explicit per-job tailored Word CV generation with exact-source evidence validation,
   safe output naming, separate output storage, and authenticated model configuration.
-- Persistent local Career Copilot sessions, minimum explicit context, versioned typed action
-  proposals, confirmation previews, idempotent/concurrency-safe execution, and non-content
-  action audits retained after conversation deletion.
-- Persisted workflow runs and steps with status, retry, input/result references, and safe
-  failure boundaries.
 - Streamlit dashboard with high-priority jobs, recent jobs, gap trends, weekly trends,
   profile editing, application tracking, and daily digest.
 - Official-careers allowlist for the selected companies; no unreliable scraping.
 - Local SQLite workflow and Docker Compose PostgreSQL deployment path.
 - CI, linting, formatting, unit/API tests, logging, error handling, and documentation.
 
-## Validation snapshot
+## In review
+
+- Task 6 implements persistent local Career Copilot sessions, typed action proposals, mandatory
+  confirmation, workflow records, idempotent execution, and non-content audits. Its initial review
+  found transaction, stale-input, Profile-version, failure-audit, and deleted-target issues.
+- Fixes are preserved in GitHub checkpoint `221233a`, but Task 6 is not accepted until scoped
+  independent re-review is clean. See `docs/HANDOFF.md` for recovery details and lessons learned.
+
+## Last accepted validation snapshot
 
 - Ruff lint: passed.
 - Ruff format check: passed.
-- Pytest: 177 passed.
-- Coverage: 79%.
-- Running API exposes `/api/v1/jobs/from-text` and persisted `/api/v1/copilot/*` flows.
+- Task 5 accepted with 158 passing tests.
+- Task 6 WIP focused suite reached 30 passing tests before re-review; this is progress evidence, not
+  a completion claim.
+- Running API exposes `/api/v1/jobs/from-text`; persisted `/api/v1/copilot/*` remains under review.
 - Local Dashboard returned HTTP 200 at `http://127.0.0.1:8501`.
 
 ## Next recommended milestone
