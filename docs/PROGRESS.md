@@ -29,6 +29,11 @@ and GitHub Actions.
   handling, and support for DOCX, text-layer PDF, and TXT sources.
 - Explicit per-job tailored Word CV generation with exact-source evidence validation,
   safe output naming, separate output storage, and authenticated model configuration.
+- Persistent local Career Copilot sessions, minimum explicit context, versioned typed action
+  proposals, confirmation previews, idempotent/concurrency-safe execution, and non-content
+  action audits retained after conversation deletion.
+- Persisted workflow runs and steps with status, retry, input/result references, and safe
+  failure boundaries.
 - Streamlit dashboard with high-priority jobs, recent jobs, gap trends, weekly trends,
   profile editing, application tracking, and daily digest.
 - Official-careers allowlist for the selected companies; no unreliable scraping.
@@ -39,17 +44,14 @@ and GitHub Actions.
 
 - Ruff lint: passed.
 - Ruff format check: passed.
-- Pytest: 19 passed.
-- Coverage: 63%.
-- Running API exposes `/api/v1/jobs/from-text`.
+- Pytest: 177 passed.
+- Coverage: 79%.
+- Running API exposes `/api/v1/jobs/from-text` and persisted `/api/v1/copilot/*` flows.
 - Local Dashboard returned HTTP 200 at `http://127.0.0.1:8501`.
 
 ## Next recommended milestone
 
-1. Introduce versioned analysis storage and implement AI Career Fit Score V2 without
-   overwriting legacy results.
-2. Build Watch List CRUD and new-matching-job notification rules.
-3. Add read-only dedicated-mailbox ingestion for allowlisted job alerts.
-4. Add visible, retryable Agent workflow execution records inside the modular monolith.
-5. Add verified structured-feed adapters one company at a time with contract tests.
-6. Add Alembic migrations before evolving a persistent production database.
+1. Add the decision-first dashboard and signal-only digest over the versioned records.
+2. Add read-only dedicated-mailbox ingestion for allowlisted job alerts.
+3. Add verified structured-feed adapters one company at a time with contract tests.
+4. Add the responsive Career Copilot panel over the persisted Copilot API.

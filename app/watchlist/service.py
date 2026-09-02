@@ -39,7 +39,17 @@ def list_companies(db: Session, *, include_disabled: bool = True) -> list[WatchL
     return list(db.scalars(query).all())
 
 
-def _commit_company(db: Session, company: WatchListCompany) -> WatchListCompany:
+def _commit_company(
+    db: Session, company: WatchListCompany, *, commit: bool = True
+) -> WatchListCompany:
+    if not commit:
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            raise DuplicateWatchListCompanyError(
+                "A Watch List company with this name or canonical domain already exists"
+            ) from exc
+        return company
     try:
         db.commit()
     except IntegrityError as exc:
@@ -51,16 +61,22 @@ def _commit_company(db: Session, company: WatchListCompany) -> WatchListCompany:
     return get_company(db, company.id)
 
 
-def create_company(db: Session, payload: WatchListCompanyCreate) -> WatchListCompany:
+def create_company(
+    db: Session, payload: WatchListCompanyCreate, *, commit: bool = True
+) -> WatchListCompany:
     values = payload.model_dump(mode="python")
     values["official_source_url"] = str(payload.official_source_url)
     company = WatchListCompany(**values)
     db.add(company)
-    return _commit_company(db, company)
+    return _commit_company(db, company, commit=commit)
 
 
 def update_company(
-    db: Session, company_id: int, payload: WatchListCompanyUpdate
+    db: Session,
+    company_id: int,
+    payload: WatchListCompanyUpdate,
+    *,
+    commit: bool = True,
 ) -> WatchListCompany:
     company = get_company(db, company_id)
     values = payload.model_dump(mode="python", exclude_unset=True)
@@ -80,7 +96,7 @@ def update_company(
         company.source_state_reason = reason
     for field, value in values.items():
         setattr(company, field, value)
-    return _commit_company(db, company)
+    return _commit_company(db, company, commit=commit)
 
 
 def _set_enabled(db: Session, company_id: int, *, enabled: bool, reason: str) -> WatchListCompany:

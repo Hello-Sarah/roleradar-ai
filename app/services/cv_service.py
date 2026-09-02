@@ -61,6 +61,20 @@ class ScanCounters:
     failed: list[str]
 
 
+@dataclass(frozen=True)
+class PreparedTailoredCV:
+    job_id: int
+    job_fingerprint: str
+    file_name: str
+    file_path: str
+    output_hash: str
+    source_cv_ids: list[int]
+    source_cv_hashes: dict[str, str]
+    model_version: str
+    prompt_version: str
+    generated_at: datetime
+
+
 def _configured_directory(path_value: str) -> Path:
     path = Path(path_value).expanduser().resolve()
     path.mkdir(parents=True, exist_ok=True)
@@ -302,19 +316,65 @@ def _build_docx(content: TailoredCVContent, output: Path) -> None:
     document.save(output)
 
 
-def generate_tailored_cv(db: Session, job_id: int, settings: Settings) -> GeneratedCVRead:
+def _cv_snapshot(document: CVDocument) -> CVDocument:
+    return CVDocument(
+        id=document.id,
+        file_path=document.file_path,
+        file_name=document.file_name,
+        file_type=document.file_type,
+        fingerprint=document.fingerprint,
+        modified_at=document.modified_at,
+        extracted_text=document.extracted_text,
+        active=document.active,
+    )
+
+
+def _job_snapshot(job: Job) -> Job:
+    return Job(
+        id=job.id,
+        fingerprint=job.fingerprint,
+        company=job.company,
+        title=job.title,
+        location=job.location,
+        url=job.url,
+        posting_date=job.posting_date,
+        description=job.description,
+        source=job.source,
+        status=job.status,
+    )
+
+
+def prepare_tailored_cv(
+    db: Session,
+    job_id: int,
+    settings: Settings,
+    *,
+    source_cv_ids: list[int] | None = None,
+) -> PreparedTailoredCV:
     job = db.get(Job, job_id)
     if job is None:
         raise LookupError("Job not found")
     documents = list_cv_documents(db)
+    if source_cv_ids is not None:
+        unique_source_ids = list(dict.fromkeys(source_cv_ids))
+        by_id = {document.id: document for document in documents}
+        if set(unique_source_ids) != set(by_id).intersection(unique_source_ids):
+            raise CVLibraryError("A selected source CV is missing or inactive")
+        documents = [by_id[source_id] for source_id in unique_source_ids]
     if not documents:
         raise CVLibraryError("The CV library is empty; scan the configured folder first")
-    content = _generate_content(documents, job, settings)
+    job_snapshot = _job_snapshot(job)
+    document_snapshots = [_cv_snapshot(document) for document in documents]
+    # Provider access and file generation must not hold a database transaction open.
+    db.rollback()
+    content = _generate_content(document_snapshots, job_snapshot, settings)
     # Preserve this deterministic gate at the generation boundary so validation cannot be
     # bypassed by a future provider adapter or an internal caller.
-    _validate_evidence(content, _source_corpus(documents))
+    _validate_evidence(content, _source_corpus(document_snapshots))
     output_directory = _configured_directory(settings.generated_cv_path)
-    file_name = f"{_safe_filename(content.name.text)}—{_safe_filename(job.title)}-chatgpt.docx"
+    file_name = (
+        f"{_safe_filename(content.name.text)}—{_safe_filename(job_snapshot.title)}-chatgpt.docx"
+    )
     artifact_directory = output_directory / "artifacts" / uuid.uuid4().hex
     output = artifact_directory / file_name
     temporary_output = output_directory / f".{uuid.uuid4().hex}.docx"
@@ -324,42 +384,98 @@ def generate_tailored_cv(db: Session, job_id: int, settings: Settings) -> Genera
         artifact_directory.mkdir(parents=True, exist_ok=False)
         temporary_output.replace(output)
         generated_at = datetime.now(UTC)
-        generated = GeneratedCV(
-            job_id=job.id,
-            file_name=file_name,
-            file_path=str(output),
-            output_hash=output_hash,
-            source_cv_ids=[document.id for document in documents],
-            source_cv_hashes={str(document.id): document.fingerprint for document in documents},
-            model_version=settings.openai_model,
-            prompt_version=CV_PROMPT_VERSION,
-            generated_at=generated_at,
-        )
-        db.add(generated)
-        db.commit()
     except Exception:
-        db.rollback()
         temporary_output.unlink(missing_ok=True)
         output.unlink(missing_ok=True)
         with suppress(OSError):
             artifact_directory.rmdir()
         raise
-    logger.info(
-        "Saved tailored CV id=%s for job_id=%s using source_cv_ids=%s to %s",
-        generated.id,
-        job.id,
-        [document.id for document in documents],
-        output,
-    )
-    return GeneratedCVRead(
-        id=generated.id,
-        job_id=job.id,
+    return PreparedTailoredCV(
+        job_id=job_snapshot.id,
+        job_fingerprint=job_snapshot.fingerprint,
         file_name=file_name,
         file_path=str(output),
-        source_cv_ids=[document.id for document in documents],
-        source_cv_hashes={str(document.id): document.fingerprint for document in documents},
         output_hash=output_hash,
+        source_cv_ids=[document.id for document in document_snapshots],
+        source_cv_hashes={
+            str(document.id): document.fingerprint for document in document_snapshots
+        },
         model_version=settings.openai_model,
         prompt_version=CV_PROMPT_VERSION,
         generated_at=generated_at,
     )
+
+
+def discard_prepared_tailored_cv(prepared: PreparedTailoredCV) -> None:
+    output = Path(prepared.file_path)
+    output.unlink(missing_ok=True)
+    with suppress(OSError):
+        output.parent.rmdir()
+
+
+def persist_prepared_tailored_cv(db: Session, prepared: PreparedTailoredCV) -> GeneratedCVRead:
+    job = db.get(Job, prepared.job_id)
+    if job is None or job.fingerprint != prepared.job_fingerprint:
+        raise CVLibraryError("The target job changed while CV generation was being prepared")
+    documents = list(
+        db.scalars(
+            select(CVDocument).where(
+                CVDocument.id.in_(prepared.source_cv_ids), CVDocument.active.is_(True)
+            )
+        ).all()
+    )
+    current_hashes = {str(document.id): document.fingerprint for document in documents}
+    if current_hashes != prepared.source_cv_hashes:
+        raise CVLibraryError("Source CV evidence changed while generation was being prepared")
+    generated = GeneratedCV(
+        job_id=prepared.job_id,
+        file_name=prepared.file_name,
+        file_path=prepared.file_path,
+        output_hash=prepared.output_hash,
+        source_cv_ids=prepared.source_cv_ids,
+        source_cv_hashes=prepared.source_cv_hashes,
+        model_version=prepared.model_version,
+        prompt_version=prepared.prompt_version,
+        generated_at=prepared.generated_at,
+    )
+    db.add(generated)
+    db.flush()
+    logger.info(
+        "Prepared tailored CV id=%s for job_id=%s using source_cv_ids=%s at %s",
+        generated.id,
+        prepared.job_id,
+        prepared.source_cv_ids,
+        prepared.file_path,
+    )
+    return GeneratedCVRead(
+        id=generated.id,
+        job_id=prepared.job_id,
+        file_name=prepared.file_name,
+        file_path=prepared.file_path,
+        source_cv_ids=prepared.source_cv_ids,
+        source_cv_hashes=prepared.source_cv_hashes,
+        output_hash=prepared.output_hash,
+        model_version=prepared.model_version,
+        prompt_version=prepared.prompt_version,
+        generated_at=prepared.generated_at,
+    )
+
+
+def generate_tailored_cv(
+    db: Session,
+    job_id: int,
+    settings: Settings,
+    *,
+    source_cv_ids: list[int] | None = None,
+    commit: bool = True,
+) -> GeneratedCVRead:
+    prepared = prepare_tailored_cv(db, job_id, settings, source_cv_ids=source_cv_ids)
+    try:
+        generated = persist_prepared_tailored_cv(db, prepared)
+        if commit:
+            db.commit()
+        return generated
+    except Exception:
+        db.rollback()
+        discard_prepared_tailored_cv(prepared)
+        raise

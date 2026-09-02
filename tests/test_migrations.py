@@ -166,7 +166,16 @@ def test_alembic_upgrades_empty_database(tmp_path) -> None:
 
     upgrade_database(url)
 
-    assert {"application_events", "cv_documents", "workflow_runs"} <= table_names(url)
+    assert {
+        "application_events",
+        "copilot_action_audits",
+        "copilot_action_items",
+        "copilot_action_proposals",
+        "copilot_messages",
+        "copilot_sessions",
+        "cv_documents",
+        "workflow_runs",
+    } <= table_names(url)
 
 
 def test_watchlist_migration_creates_source_history_and_initial_seed(tmp_path) -> None:

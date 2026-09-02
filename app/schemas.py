@@ -37,6 +37,11 @@ class ApplicationStatus(StrEnum):
     IGNORED = "Ignored"
 
 
+class ActionItemKind(StrEnum):
+    LEARNING = "learning"
+    NEXT_ACTION = "next_action"
+
+
 class Recommendation(StrEnum):
     APPLY_NOW = "Apply Now"
     CONSIDER = "Consider"

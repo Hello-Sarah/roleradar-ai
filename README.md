@@ -20,6 +20,9 @@ skills are missing, and what action to take next. It is intentionally not a job 
   and automatic history entries whenever the current status changes.
 - Scan a private folder of existing `.docx`, `.pdf`, and `.txt` CVs, then generate an
   evidence-grounded Word CV for a selected job as `名字—岗位-chatgpt.docx`.
+- Use local Career Copilot sessions with minimum selected-record context. Copilot actions
+  are stored as typed previews and cannot change jobs, applications, Watch List companies,
+  analyses, CV artifacts, or action items until an idempotent confirmation is submitted.
 - View high-priority and recent jobs, skill-gap trends, weekly trends, and a daily digest.
 - Use an OpenAI-compatible API for structured explanations. Without an API key, every
   workflow remains functional through a deterministic explanation fallback.
@@ -85,11 +88,13 @@ Streamlit client. This is the appropriate reliability/complexity tradeoff for th
 app/
   api/          HTTP boundary and validation
   analysis/     deterministic classification and LLM explanation
+  copilot/      minimum context, typed proposals, and confirmed actions
   database/     SQLAlchemy session and persistence models
   dashboard/    Streamlit UI and API client
   ingestion/    normalization, fingerprinting, source allowlist
   scoring/      deterministic 100-point scoring rubric
   services/     use cases and transaction boundaries
+  workflows/    persisted retryable workflow lifecycle
   workers/      scheduler-friendly digest entry point
 tests/          unit and end-to-end API tests
 docs/           decisions and scoring documentation
@@ -160,10 +165,11 @@ structured feed is verified and covered by a contract test.
 
 - Keyword classification and skill extraction are transparent baselines, not semantic
   models. Low-confidence categories are explicitly marked for review.
-- Profile edits do not silently rewrite historical analyses. A future reanalysis endpoint
-  should version both the profile and rubric.
-- `create_all` bootstraps the MVP schema. Add Alembic migrations before evolving a
-  persistent production deployment.
+- Profile edits do not silently rewrite historical analyses; explicit reanalysis appends
+  a new immutable result tied to the active profile and rubric versions.
+- Copilot conversations are local-only and do not synchronize across devices. The current
+  deterministic natural-language fallback proposes save/status actions; every allowed
+  operation is also available through the strict typed proposal endpoint.
 - The daily digest is generated on demand or by an external scheduler; delivery by email
   or chat is intentionally out of scope.
 

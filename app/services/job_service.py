@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import desc, select
@@ -21,6 +22,7 @@ from app.schemas import (
     ApplicationEventCreate,
     ApplicationEventRead,
     ApplicationStatus,
+    CandidateProfileRead,
     CandidateProfileVersionRead,
     ClassificationRead,
     DashboardRead,
@@ -42,6 +44,15 @@ logger = logging.getLogger(__name__)
 
 class DuplicateJobError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class PreparedJobAnalysis:
+    job_id: int
+    expected_analysis_id: int | None
+    profile_id: int
+    profile_version: str
+    values: dict[str, object]
 
 
 def _job_query():
@@ -112,9 +123,12 @@ def to_job_read(job: Job) -> JobRead:
     )
 
 
-def _build_analysis(
-    db: Session, job: Job, profile: CandidateProfile, settings: Settings
-) -> JobAnalysis:
+def _analysis_values(
+    job: JobCreate,
+    profile: CandidateProfileRead,
+    classification: ClassificationRead,
+    settings: Settings,
+) -> dict[str, object]:
     score = score_job_v2(
         JobEvidence(title=job.title, description=job.description),
         ProfileEvidence(
@@ -132,43 +146,110 @@ def _build_analysis(
         for weak in dimension.missing_or_weak_evidence
     ]
     explanation, model_used = explain_fit(
-        job=JobCreate(
-            company=job.company,
-            title=job.title,
-            location=job.location,
-            url=job.url,
-            posting_date=job.posting_date,
-            description=job.description,
-            source=job.source,
-        ),
-        profile=to_profile_read(profile),
-        classification=ClassificationRead(
-            category=job.classification.category,
-            confidence=job.classification.confidence,
-            evidence=job.classification.evidence,
-        ),
+        job=job,
+        profile=profile,
+        classification=classification,
         result=score,
         settings=settings,
     )
+    return {
+        "scoring_version": SCORING_VERSION,
+        "rubric_version": SCORING_VERSION,
+        "model_version": model_used,
+        "prompt_version": PROMPT_VERSION,
+        "fit_score": score.total_score,
+        "score_breakdown": {name: dimension.score for name, dimension in score.dimensions.items()},
+        "score_details": details,
+        "strengths": strengths or ["NO_MATCHED_GREEN_FLAGS"],
+        "gaps": gaps or ["NO_WEAK_DIMENSIONS"],
+        "evidence": [f"{item.id}: {item.text}" for item in score.evidence],
+        "recommendation": score.recommendation_band,
+        "summary": explanation.summary,
+        "model_used": model_used,
+    }
+
+
+def _job_create_snapshot(job: Job) -> JobCreate:
+    return JobCreate(
+        company=job.company,
+        title=job.title,
+        location=job.location,
+        url=job.url,
+        posting_date=job.posting_date,
+        description=job.description,
+        source=job.source,
+    )
+
+
+def _classification_snapshot(job: Job) -> ClassificationRead:
+    return ClassificationRead(
+        category=job.classification.category,
+        confidence=job.classification.confidence,
+        evidence=list(job.classification.evidence),
+    )
+
+
+def _build_analysis(
+    db: Session, job: Job, profile: CandidateProfile, settings: Settings
+) -> JobAnalysis:
     profile_snapshot = get_or_create_profile_version(db, profile)
     return JobAnalysis(
         profile_id=profile.id,
         profile_snapshot=profile_snapshot,
-        scoring_version=SCORING_VERSION,
         profile_version=profile_snapshot.version,
-        rubric_version=SCORING_VERSION,
-        model_version=model_used,
-        prompt_version=PROMPT_VERSION,
-        fit_score=score.total_score,
-        score_breakdown={name: dimension.score for name, dimension in score.dimensions.items()},
-        score_details=details,
-        strengths=strengths or ["NO_MATCHED_GREEN_FLAGS"],
-        gaps=gaps or ["NO_WEAK_DIMENSIONS"],
-        evidence=[f"{item.id}: {item.text}" for item in score.evidence],
-        recommendation=score.recommendation_band,
-        summary=explanation.summary,
-        model_used=model_used,
+        **_analysis_values(
+            _job_create_snapshot(job),
+            to_profile_read(profile),
+            _classification_snapshot(job),
+            settings,
+        ),
     )
+
+
+def prepare_reanalysis(db: Session, job_id: int, settings: Settings) -> PreparedJobAnalysis:
+    """Read snapshots, close the read transaction, then call the explanation provider."""
+    job = get_job(db, job_id)
+    profile = db.scalar(select(CandidateProfile).order_by(CandidateProfile.id).limit(1))
+    if profile is None:
+        raise ValueError("A candidate profile is required before reanalysis")
+    job_snapshot = _job_create_snapshot(job)
+    profile_snapshot = to_profile_read(profile)
+    classification = _classification_snapshot(job)
+    expected_analysis_id = job.analysis.id if job.analysis else None
+    profile_version = get_or_create_profile_version(db, profile).version
+    # Discard any implicit, uncommitted profile-version insert. It will be recreated only
+    # inside the confirmed write transaction by persist_prepared_reanalysis.
+    db.rollback()
+    values = _analysis_values(job_snapshot, profile_snapshot, classification, settings)
+    return PreparedJobAnalysis(
+        job_id=job_id,
+        expected_analysis_id=expected_analysis_id,
+        profile_id=profile_snapshot.id,
+        profile_version=profile_version,
+        values=values,
+    )
+
+
+def persist_prepared_reanalysis(db: Session, prepared: PreparedJobAnalysis) -> JobAnalysis:
+    job = get_job(db, prepared.job_id)
+    current_analysis_id = job.analysis.id if job.analysis else None
+    if current_analysis_id != prepared.expected_analysis_id:
+        raise ValueError("The job analysis changed while reanalysis was being prepared")
+    profile = db.get(CandidateProfile, prepared.profile_id)
+    if profile is None:
+        raise ValueError("The candidate profile changed while reanalysis was being prepared")
+    profile_snapshot = get_or_create_profile_version(db, profile)
+    if profile_snapshot.version != prepared.profile_version:
+        raise ValueError("The candidate profile changed while reanalysis was being prepared")
+    analysis = JobAnalysis(
+        profile_id=profile.id,
+        profile_snapshot=profile_snapshot,
+        profile_version=profile_snapshot.version,
+        **prepared.values,
+    )
+    job.analyses.append(analysis)
+    db.flush()
+    return analysis
 
 
 def create_and_analyze_job(db: Session, payload: JobCreate, settings: Settings) -> Job:
@@ -235,13 +316,18 @@ def list_analyses(db: Session, job_id: int) -> list[JobAnalysis]:
     )
 
 
-def reanalyze_job(db: Session, job_id: int, settings: Settings) -> JobAnalysis:
+def reanalyze_job(
+    db: Session, job_id: int, settings: Settings, *, commit: bool = True
+) -> JobAnalysis:
     job = get_job(db, job_id)
     profile = get_or_create_profile(db)
     analysis = _build_analysis(db, job, profile, settings)
     job.analyses.append(analysis)
-    db.commit()
-    db.refresh(analysis)
+    if commit:
+        db.commit()
+        db.refresh(analysis)
+    else:
+        db.flush()
     logger.info(
         "job reanalyzed",
         extra={
@@ -253,7 +339,9 @@ def reanalyze_job(db: Session, job_id: int, settings: Settings) -> JobAnalysis:
     return analysis
 
 
-def update_status(db: Session, job_id: int, status: ApplicationStatus) -> Job:
+def update_status(
+    db: Session, job_id: int, status: ApplicationStatus, *, commit: bool = True
+) -> Job:
     job = get_job(db, job_id)
     if job.status == status.value:
         return job
@@ -265,19 +353,25 @@ def update_status(db: Session, job_id: int, status: ApplicationStatus) -> Job:
             notes=f"Status changed to {status.value}",
         )
     )
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return get_job(db, job_id)
 
 
 def add_application_event(
-    db: Session, job_id: int, payload: ApplicationEventCreate
+    db: Session, job_id: int, payload: ApplicationEventCreate, *, commit: bool = True
 ) -> ApplicationEvent:
     job = get_job(db, job_id)
     event = ApplicationEvent(job_id=job.id, **payload.model_dump(mode="python"))
     job.status = payload.status.value
     db.add(event)
-    db.commit()
-    db.refresh(event)
+    if commit:
+        db.commit()
+        db.refresh(event)
+    else:
+        db.flush()
     return event
 
 

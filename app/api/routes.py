@@ -7,7 +7,37 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
-from app.database.models import GeneratedCV
+from app.copilot.actions import (
+    ActionConflictError,
+    ActionProposalError,
+    confirm_action,
+    create_action_proposal,
+    to_action_proposal_read,
+)
+from app.copilot.context import ContextSelection, CopilotContext, build_context
+from app.copilot.contracts import (
+    ActionConfirmRequest,
+    ActionIntentRequest,
+    ActionProposalRead,
+    ActionResult,
+    CopilotMessageCreate,
+    CopilotMessageRead,
+    CopilotSessionCreate,
+    CopilotSessionRead,
+    CopilotSessionUpdate,
+    ProposalCreateRequest,
+)
+from app.copilot.service import (
+    add_message,
+    create_session,
+    delete_session,
+    get_session,
+    list_messages,
+    list_sessions,
+    propose_action,
+    rename_session,
+)
+from app.database.models import CopilotActionProposal, GeneratedCV
 from app.database.session import get_db
 from app.i18n.service import translate
 from app.ingestion.text_extractor import extract_job_from_text
@@ -366,3 +396,191 @@ def download_generated_cv_legacy(file_name: str) -> None:
     """Avoid ambiguous filename-only artifact retrieval after immutable output storage."""
     del file_name
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+
+
+@router.get("/copilot/context", response_model=CopilotContext)
+def read_copilot_context(
+    db: Db,
+    route: str | None = None,
+    job_id: int | None = None,
+    company_id: int | None = None,
+    session_id: int | None = None,
+    cv_document_ids: Annotated[list[int] | None, Query()] = None,
+) -> CopilotContext:
+    try:
+        return build_context(
+            ContextSelection(
+                route=route,
+                job_id=job_id,
+                company_id=company_id,
+                session_id=session_id,
+                cv_document_ids=cv_document_ids or [],
+            ),
+            db,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/copilot/sessions",
+    response_model=CopilotSessionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_copilot_session(payload: CopilotSessionCreate, db: Db) -> CopilotSessionRead:
+    return CopilotSessionRead.model_validate(
+        create_session(db, title=payload.title, locale=payload.locale)
+    )
+
+
+@router.get("/copilot/sessions", response_model=list[CopilotSessionRead])
+def read_copilot_sessions(db: Db) -> list[CopilotSessionRead]:
+    return [CopilotSessionRead.model_validate(session) for session in list_sessions(db)]
+
+
+@router.get("/copilot/sessions/{session_id}", response_model=CopilotSessionRead)
+def read_copilot_session(session_id: int, db: Db) -> CopilotSessionRead:
+    try:
+        return CopilotSessionRead.model_validate(get_session(db, session_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.patch("/copilot/sessions/{session_id}", response_model=CopilotSessionRead)
+def update_copilot_session(
+    session_id: int, payload: CopilotSessionUpdate, db: Db
+) -> CopilotSessionRead:
+    try:
+        return CopilotSessionRead.model_validate(rename_session(db, session_id, payload.title))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.delete(
+    "/copilot/sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def remove_copilot_session(session_id: int, db: Db) -> Response:
+    try:
+        delete_session(db, session_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/copilot/sessions/{session_id}/messages",
+    response_model=CopilotMessageRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_copilot_message(
+    session_id: int, payload: CopilotMessageCreate, db: Db
+) -> CopilotMessageRead:
+    try:
+        return CopilotMessageRead.model_validate(add_message(db, session_id, payload))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get("/copilot/sessions/{session_id}/messages", response_model=list[CopilotMessageRead])
+def read_copilot_messages(session_id: int, db: Db) -> list[CopilotMessageRead]:
+    try:
+        return [
+            CopilotMessageRead.model_validate(message) for message in list_messages(db, session_id)
+        ]
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post(
+    "/copilot/propose",
+    response_model=ActionProposalRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def propose_copilot_action(
+    payload: ActionIntentRequest, db: Db, settings: AppSettings
+) -> ActionProposalRead:
+    try:
+        context = build_context(
+            ContextSelection(
+                route=payload.route,
+                job_id=payload.job_id,
+                company_id=payload.company_id,
+                session_id=payload.session_id,
+                cv_document_ids=payload.cv_document_ids,
+            ),
+            db,
+        )
+        # The provider receives a detached Pydantic snapshot; never hold a database
+        # transaction open while waiting for model-backed intent classification.
+        db.rollback()
+        proposal = propose_action(payload.message, context, settings)
+        return to_action_proposal_read(
+            create_action_proposal(
+                db,
+                session_id=payload.session_id,
+                proposal=proposal,
+            )
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ActionProposalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+
+
+@router.post(
+    "/copilot/proposals",
+    response_model=ActionProposalRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_copilot_proposal(payload: ProposalCreateRequest, db: Db) -> ActionProposalRead:
+    try:
+        return to_action_proposal_read(
+            create_action_proposal(
+                db,
+                session_id=payload.session_id,
+                proposal=payload.proposal,
+            )
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ActionProposalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+
+
+@router.get("/copilot/proposals/{proposal_id}", response_model=ActionProposalRead)
+def read_copilot_proposal(proposal_id: int, db: Db) -> ActionProposalRead:
+    proposal = db.get(CopilotActionProposal, proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proposal not found")
+    return to_action_proposal_read(proposal)
+
+
+@router.post("/copilot/proposals/{proposal_id}/confirm", response_model=ActionResult)
+def confirm_copilot_proposal(
+    proposal_id: int,
+    payload: ActionConfirmRequest,
+    db: Db,
+    settings: AppSettings,
+) -> ActionResult:
+    try:
+        return confirm_action(
+            proposal_id,
+            payload.idempotency_key,
+            db,
+            settings,
+            actor=payload.actor,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except (ActionConflictError, ActionProposalError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except CVLibraryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc

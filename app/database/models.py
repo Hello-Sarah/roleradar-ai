@@ -272,3 +272,92 @@ class WorkflowStep(TimestampMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     workflow_run: Mapped[WorkflowRun] = relationship(back_populates="steps")
+
+
+class CopilotSession(TimestampMixin, Base):
+    __tablename__ = "copilot_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    locale: Mapped[str] = mapped_column(String(20), default="en")
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    messages: Mapped[list["CopilotMessage"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan", order_by="CopilotMessage.id"
+    )
+    proposals: Mapped[list["CopilotActionProposal"]] = relationship(back_populates="session")
+    audits: Mapped[list["CopilotActionAudit"]] = relationship(back_populates="session")
+
+
+class CopilotMessage(Base):
+    __tablename__ = "copilot_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("copilot_sessions.id"), index=True)
+    role: Mapped[str] = mapped_column(String(20))
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sources: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+    session: Mapped[CopilotSession] = relationship(back_populates="messages")
+
+
+class CopilotActionProposal(TimestampMixin, Base):
+    __tablename__ = "copilot_action_proposals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("copilot_sessions.id"), index=True)
+    proposal_type: Mapped[str] = mapped_column(String(80), index=True)
+    proposal_version: Mapped[str] = mapped_column(String(20))
+    target_type: Mapped[str] = mapped_column(String(40))
+    target_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    parameters: Mapped[dict[str, object]] = mapped_column(JSON)
+    current_value: Mapped[dict[str, object]] = mapped_column(JSON)
+    proposed_value: Mapped[dict[str, object]] = mapped_column(JSON)
+    side_effects: Mapped[list[str]] = mapped_column(JSON)
+    private_data_usage: Mapped[dict[str, object]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    session: Mapped[CopilotSession] = relationship(back_populates="proposals")
+    audit: Mapped["CopilotActionAudit | None"] = relationship(
+        back_populates="proposal", uselist=False
+    )
+
+
+class CopilotActionAudit(Base):
+    __tablename__ = "copilot_action_audits"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("copilot_sessions.id"), index=True)
+    proposal_id: Mapped[int | None] = mapped_column(
+        ForeignKey("copilot_action_proposals.id"), nullable=True, unique=True
+    )
+    proposal_type: Mapped[str] = mapped_column(String(80), index=True)
+    proposal_version: Mapped[str] = mapped_column(String(20))
+    parameter_summary: Mapped[dict[str, object]] = mapped_column(JSON)
+    confirmed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    actor: Mapped[str] = mapped_column(String(100))
+    result_record_ids: Mapped[dict[str, list[int]]] = mapped_column(JSON)
+    idempotency_key: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    error_state: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    session: Mapped[CopilotSession] = relationship(back_populates="audits")
+    proposal: Mapped[CopilotActionProposal | None] = relationship(back_populates="audit")
+
+
+class CopilotActionItem(TimestampMixin, Base):
+    __tablename__ = "copilot_action_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
+    item_kind: Mapped[str] = mapped_column(String(30), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
