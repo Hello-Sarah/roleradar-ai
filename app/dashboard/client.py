@@ -15,6 +15,8 @@ class RoleRadarClient:
         try:
             response = httpx.request(method, f"{self.base_url}{path}", timeout=30, **kwargs)
             response.raise_for_status()
+            if response.status_code == 204 or not response.content:
+                return None
             return response.json()
         except httpx.HTTPStatusError as exc:
             detail = exc.response.json().get("detail", exc.response.text)
@@ -33,3 +35,6 @@ class RoleRadarClient:
 
     def patch(self, path: str, payload: dict[str, Any]) -> Any:
         return self._request("PATCH", path, json=payload)
+
+    def delete(self, path: str) -> Any:
+        return self._request("DELETE", path)

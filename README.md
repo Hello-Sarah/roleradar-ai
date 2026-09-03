@@ -23,6 +23,9 @@ skills are missing, and what action to take next. It is intentionally not a job 
 - Use local Career Copilot sessions with minimum selected-record context. Copilot actions
   are stored as typed previews and cannot change jobs, applications, Watch List companies,
   analyses, CV artifacts, or action items until an idempotent confirmation is submitted.
+- Work from a bilingual English/Simplified Chinese Calm Intelligence interface with eight
+  focused pages, persistent locale selection, responsive navigation, and a desktop or mobile
+  Career Copilot panel.
 - View high-priority and recent jobs, skill-gap trends, weekly trends, and a daily digest.
 - Use an OpenAI-compatible API for structured explanations. Without an API key, every
   workflow remains functional through a deterministic explanation fallback.
@@ -73,8 +76,8 @@ Copy `.env.example` to `.env`. Important variables:
 
 Never commit `.env` or API keys.
 
-To use the CV Library, place source CVs in `CV_LIBRARY_PATH`, open the **CV Library**
-tab, scan the folder, select a saved job, and generate the tailored CV. Generation
+To use the CV Library, place source CVs in `CV_LIBRARY_PATH`, open **CV Library** from
+the navigation, scan the folder, select a saved job, and generate the tailored CV. Generation
 requires `OPENAI_API_KEY`; scanning does not. CV text is sent to the configured
 OpenAI-compatible provider only when you explicitly generate a CV. Source files and
 generated files are excluded from Git by default.
@@ -159,7 +162,7 @@ structured feed is verified and covered by a contract test.
   dashboard, tracker, digest/trend foundations.
 - Phase 2: verified structured company adapters, scheduled monitoring, stronger
   canonical duplicate detection, delivery channels.
-- Phase 3: UI polish, feedback-driven weights, prompt evaluation, golden datasets.
+- Phase 3: feedback-driven weights, prompt evaluation, golden datasets.
 
 ## Current limitations
 

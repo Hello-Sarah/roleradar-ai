@@ -29,8 +29,9 @@ and GitHub Actions.
   handling, and support for DOCX, text-layer PDF, and TXT sources.
 - Explicit per-job tailored Word CV generation with exact-source evidence validation,
   safe output naming, separate output storage, and authenticated model configuration.
-- Streamlit dashboard with high-priority jobs, recent jobs, gap trends, weekly trends,
-  profile editing, application tracking, and daily digest.
+- Bilingual Calm Intelligence Streamlit workspace with eight focused pages, responsive
+  navigation, decision-first job cards, editable extraction preview, and persistent Career
+  Copilot on desktop and mobile.
 - Official-careers allowlist for the selected companies; no unreliable scraping.
 - Local SQLite workflow and Docker Compose PostgreSQL deployment path.
 - CI, linting, formatting, unit/API tests, logging, error handling, and documentation.
@@ -39,6 +40,8 @@ and GitHub Actions.
 
 - Task 6 implements persistent local Career Copilot sessions, typed action proposals, mandatory
   confirmation, workflow records, idempotent execution, and non-content audits.
+- Task 7 presents those workflows through the bilingual Calm Intelligence workspace, including
+  session lifecycle controls and explicit target/current/proposed/side-effect/private-data review.
 - Independent review identified transaction, stale-input, Profile-version, failure-audit, and
   deleted-target issues. Commit `128b4f9` fixed them; scoped re-review marked all findings addressed
   with no new Critical or Important breakage. See `docs/HANDOFF.md` for recovery details and lessons.
@@ -58,4 +61,4 @@ and GitHub Actions.
 1. Add the decision-first dashboard and signal-only digest over the versioned records.
 2. Add read-only dedicated-mailbox ingestion for allowlisted job alerts.
 3. Add verified structured-feed adapters one company at a time with contract tests.
-4. Add the responsive Career Copilot panel over the persisted Copilot API.
+4. Validate visual and accessibility acceptance evidence across the complete bilingual workspace.
