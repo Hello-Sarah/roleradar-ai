@@ -29,6 +29,8 @@ from app.schemas import (
     ClassificationRead,
     DashboardRead,
     DigestRead,
+    DigestTrendRead,
+    DueFollowUpRead,
     JobCreate,
     JobRead,
     TrendPoint,
@@ -433,6 +435,29 @@ def get_dashboard(db: Session) -> DashboardRead:
     week_rows = [
         (week, len(scores), sum(scores) / len(scores)) for week, scores in sorted(grouped.items())
     ]
+    today = datetime.now(UTC).date()
+    terminal_statuses = {
+        ApplicationStatus.OFFER.value,
+        ApplicationStatus.REJECTED.value,
+        ApplicationStatus.IGNORED.value,
+    }
+    due_follow_ups: list[DueFollowUpRead] = []
+    for job in jobs:
+        if job.status in terminal_statuses:
+            continue
+        latest_follow_up = next(
+            (event for event in job.application_events if event.next_follow_up_date),
+            None,
+        )
+        if latest_follow_up and latest_follow_up.next_follow_up_date <= today:
+            due_follow_ups.append(
+                DueFollowUpRead(
+                    job=to_job_read(job),
+                    next_follow_up_date=latest_follow_up.next_follow_up_date,
+                    notes=latest_follow_up.notes,
+                )
+            )
+    due_follow_ups.sort(key=lambda item: item.next_follow_up_date)
     return DashboardRead(
         high_priority_jobs=[to_job_read(job) for job in high_priority[:10]],
         recently_added_jobs=[to_job_read(job) for job in jobs[:10]],
@@ -442,6 +467,7 @@ def get_dashboard(db: Session) -> DashboardRead:
             TrendPoint(week=str(week), jobs=count, average_fit_score=round(float(avg or 0), 1))
             for week, count, avg in week_rows
         ],
+        due_follow_ups=due_follow_ups,
     )
 
 
@@ -456,7 +482,10 @@ def get_daily_digest(db: Session) -> DigestRead:
         if job.classification:
             key = job.classification.category
             categories[key] = categories.get(key, 0) + 1
-    trends = [f"{category}: {count} new role(s)" for category, count in categories.items()]
+    trends = [
+        DigestTrendRead(category=category, new_roles=count)
+        for category, count in categories.items()
+    ]
     return DigestRead(
         generated_at=datetime.now(UTC),
         high_priority_jobs=[to_job_read(job) for job in priority],

@@ -303,12 +303,17 @@ class WatchListCompanyRead(WatchListCompanyBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class DigestTrendRead(BaseModel):
+    category: str
+    new_roles: int
+
+
 class DigestRead(BaseModel):
     generated_at: datetime
     high_priority_jobs: list[JobRead]
     new_companies: list[str]
     emerging_skills: list[tuple[str, int]]
-    hiring_trends: list[str]
+    hiring_trends: list[DigestTrendRead]
 
 
 class TrendPoint(BaseModel):
@@ -317,12 +322,19 @@ class TrendPoint(BaseModel):
     average_fit_score: float
 
 
+class DueFollowUpRead(BaseModel):
+    job: JobRead
+    next_follow_up_date: date
+    notes: str | None = None
+
+
 class DashboardRead(BaseModel):
     high_priority_jobs: list[JobRead]
     recently_added_jobs: list[JobRead]
     status_counts: dict[str, int]
     skill_gap_trends: list[tuple[str, int]]
     weekly_hiring_trends: list[TrendPoint]
+    due_follow_ups: list[DueFollowUpRead]
 
 
 class CVDocumentRead(BaseModel):

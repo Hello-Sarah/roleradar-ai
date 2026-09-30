@@ -21,12 +21,18 @@ from app.dashboard.pages import (
     profile,
     watchlist,
 )
-from app.dashboard.state import UIContext, apply_locale_selection, resolve_ui_locale
+from app.dashboard.state import (
+    UIContext,
+    apply_locale_selection,
+    apply_route_selection,
+    resolve_ui_locale,
+)
 from app.dashboard.theme import apply_theme
 from app.i18n.service import translate
 from app.schemas import Locale
 
 PageRenderer = Callable[[RoleRadarClient, Locale], None]
+_LOCALE_COOKIE = "roleradar_locale"
 
 
 def page_renderers() -> dict[str, PageRenderer]:
@@ -49,7 +55,25 @@ def _browser_locale() -> str | None:
         return None
 
 
-def _render_shell_navigation(locale: Locale) -> tuple[str, Locale]:
+def _stored_browser_locale() -> str | None:
+    try:
+        return st.context.cookies.get(_LOCALE_COOKIE)
+    except (AttributeError, RuntimeError):
+        return None
+
+
+def _persist_browser_locale(locale: Locale) -> None:
+    st.iframe(
+        "<script>document.cookie="
+        f"'{_LOCALE_COOKIE}={locale}; Path=/; Max-Age=31536000; SameSite=Lax'"
+        "</script>",
+        height=1,
+        width=1,
+        tab_index=-1,
+    )
+
+
+def _render_shell_navigation(locale: Locale) -> str:
     items = navigation_items(locale)
     routes = [item.route for item in items]
     current = str(st.session_state.get("ui.route", "dashboard"))
@@ -66,17 +90,44 @@ def _render_shell_navigation(locale: Locale) -> tuple[str, Locale]:
             label_visibility="collapsed",
             key="ui-navigation",
         )
+        apply_route_selection(current, route, st.session_state)
+    return route
+
+
+def _render_top_utilities(locale: Locale, client: RoleRadarClient) -> Locale:
+    private, language, health_column, settings = st.columns([4, 1.4, 1, 0.8])
+    with language:
         selected_language = st.segmented_control(
             translate(locale, "common.language"),
             ["中文", "EN"],
             default="中文" if locale == "zh-Hans" else "EN",
             key="ui-language-control",
+            label_visibility="collapsed",
         )
         selected_locale: Locale = "zh-Hans" if selected_language == "中文" else "en"
-        st.session_state["ui.route"] = route
         if apply_locale_selection(locale, selected_locale, st.session_state, st.query_params):
+            _persist_browser_locale(selected_locale)
+    with private:
+        st.caption(translate(selected_locale, "app.private_local"))
+    with health_column:
+        try:
+            health = client.get("/api/v1/health")
+            key = "app.health.ready" if health.get("status") == "ok" else "app.health.degraded"
+            st.caption("● " + translate(selected_locale, key))
+        except APIClientError:
+            st.caption("○ " + translate(selected_locale, "app.health.unavailable"))
+    with settings:
+        if st.button(
+            translate(selected_locale, "common.settings"),
+            key="top-settings",
+            use_container_width=True,
+        ):
+            apply_route_selection(
+                str(st.session_state.get("ui.route", "dashboard")), "profile", st.session_state
+            )
+            st.session_state["ui-navigation"] = "profile"
             st.rerun()
-    return route, selected_locale
+    return selected_locale
 
 
 def render_app(client: RoleRadarClient) -> None:
@@ -87,20 +138,10 @@ def render_app(client: RoleRadarClient) -> None:
         str(explicit) if explicit else None,
         str(query_locale) if query_locale else None,
         _browser_locale(),
+        _stored_browser_locale(),
     )
-    route, locale = _render_shell_navigation(locale)
-    top_left, top_right = st.columns([4, 1])
-    with top_left:
-        st.caption(translate(locale, "app.private_local"))
-    with top_right:
-        try:
-            health = client.get("/api/v1/health")
-            if health.get("status") == "ok":
-                st.caption("● " + translate(locale, "app.health.ready"))
-            else:
-                st.caption("● " + translate(locale, "app.health.degraded"))
-        except APIClientError:
-            st.caption("○ " + translate(locale, "app.health.unavailable"))
+    locale = _render_top_utilities(locale, client)
+    route = _render_shell_navigation(locale)
 
     context = UIContext(
         route=route,
@@ -128,8 +169,13 @@ def render_app(client: RoleRadarClient) -> None:
     with content:
         try:
             page_renderers()[route](client, locale)
-        except APIClientError as exc:
-            render_state(locale, "error", f"{translate(locale, 'error.unavailable')}\n\n{exc}")
+        except APIClientError:
+            render_state(
+                locale,
+                "error",
+                translate(locale, "error.unavailable"),
+                retry_key=f"page-retry-{route}",
+            )
     with copilot, st.container(border=True, key="desktop_copilot_panel"):
         render_copilot_panel(context, client, key_prefix="desktop-copilot")
 

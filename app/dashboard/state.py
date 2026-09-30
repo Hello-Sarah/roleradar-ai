@@ -76,9 +76,10 @@ def resolve_ui_locale(
     explicit: str | None,
     persisted_query: str | None,
     browser_locale: str | None,
+    persisted_browser: str | None = None,
 ) -> Locale:
-    """Resolve explicit/session choice, persisted URL choice, then browser preference."""
-    return resolve_locale(explicit or persisted_query, browser_locale)
+    """Resolve explicit/session, URL, durable browser choice, then browser preference."""
+    return resolve_locale(explicit or persisted_query or persisted_browser, browser_locale)
 
 
 def persist_locale(
@@ -106,4 +107,48 @@ def apply_locale_selection(
 def select_job_context(session_state: MutableMapping[str, object], job_id: int) -> None:
     """Select one job for Copilot and clear any mutually exclusive company context."""
     session_state["ui.selected_job_id"] = job_id
+    session_state.pop("ui.selected_company_id", None)
+
+
+def apply_route_selection(
+    previous_route: str,
+    selected_route: str,
+    session_state: MutableMapping[str, object],
+) -> None:
+    """Update page context and discard record context when the visible page changes."""
+    session_state["ui.route"] = selected_route
+    if selected_route == previous_route:
+        return
+    session_state.pop("ui.selected_job_id", None)
+    session_state.pop("ui.selected_company_id", None)
+
+
+def apply_job_filter(
+    session_state: MutableMapping[str, object],
+    *,
+    status: str | None = None,
+    minimum_score: int | None = None,
+    gap: str | None = None,
+    created_week: str | None = None,
+) -> None:
+    """Navigate a Dashboard metric to the matching saved-job records."""
+    session_state["ui.route"] = "jobs"
+    session_state["ui-navigation"] = "jobs"
+    if status is None:
+        session_state.pop("ui.jobs.status", None)
+    else:
+        session_state["ui.jobs.status"] = status
+    if minimum_score is None:
+        session_state.pop("ui.jobs.minimum_score", None)
+    else:
+        session_state["ui.jobs.minimum_score"] = minimum_score
+    if gap is None:
+        session_state.pop("ui.jobs.gap", None)
+    else:
+        session_state["ui.jobs.gap"] = gap
+    if created_week is None:
+        session_state.pop("ui.jobs.created_week", None)
+    else:
+        session_state["ui.jobs.created_week"] = created_week
+    session_state.pop("ui.selected_job_id", None)
     session_state.pop("ui.selected_company_id", None)

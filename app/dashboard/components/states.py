@@ -41,7 +41,13 @@ def low_confidence_label(locale: Locale, confidence: float) -> str | None:
     return translate(locale, "analysis.needs_review") if confidence < 0.5 else None
 
 
-def render_state(locale: Locale, kind: StateKind, description: str | None = None) -> None:
+def render_state(
+    locale: Locale,
+    kind: StateKind,
+    description: str | None = None,
+    *,
+    retry_key: str | None = None,
+) -> None:
     """Render a local state without blocking unrelated page regions."""
     import streamlit as st
 
@@ -49,6 +55,8 @@ def render_state(locale: Locale, kind: StateKind, description: str | None = None
     body = description or copy.description
     if kind == "error":
         st.error(f"**{copy.title}**\n\n{body}")
+        if st.button(copy.action_label, key=retry_key or "state-retry"):
+            st.rerun()
     elif kind == "success":
         st.success(body)
     elif kind == "loading":

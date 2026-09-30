@@ -10,7 +10,7 @@ import streamlit as st
 
 from app.dashboard.client import RoleRadarClient
 from app.dashboard.components.job_card import render_job_card
-from app.dashboard.state import select_job_context, stable_key
+from app.dashboard.state import select_job_context
 from app.i18n.service import translate
 from app.schemas import Locale
 
@@ -40,6 +40,7 @@ def build_confirmed_job_payload(
 def cancel_extraction(session_state: MutableMapping[str, object]) -> None:
     session_state.pop("analyze.extracted_job", None)
     session_state.pop("analyze.raw_text", None)
+    session_state.pop("analyze.source_url", None)
 
 
 def _posting_date(value: object) -> date | None:
@@ -50,81 +51,118 @@ def _posting_date(value: object) -> date | None:
     return None
 
 
+def _render_preview(client: RoleRadarClient, locale: Locale, extracted: dict[str, Any]) -> None:
+    st.info(translate(locale, "job.review.nothing_saved"))
+    with st.form("analyze-preview-form"):
+        company = st.text_input(
+            translate(locale, "form.company"),
+            extracted["company"],
+            key="analyze-preview-company",
+        )
+        title = st.text_input(
+            translate(locale, "form.title"),
+            extracted["title"],
+            key="analyze-preview-title",
+        )
+        location = st.text_input(
+            translate(locale, "form.location"),
+            extracted["location"],
+            key="analyze-preview-location",
+        )
+        url = st.text_input(
+            translate(locale, "form.job_url"),
+            extracted.get("url") or "",
+            key="analyze-preview-url",
+        )
+        posting_date = st.date_input(
+            translate(locale, "job.review.posting_date"),
+            value=_posting_date(extracted.get("posting_date")),
+            key="analyze-preview-date",
+        )
+        description = st.text_area(
+            translate(locale, "form.description"),
+            extracted["description"],
+            height=360,
+            key="analyze-preview-description",
+        )
+        confirm = st.form_submit_button(
+            translate(locale, "job.review.confirm_and_analyze"),
+            type="primary",
+            key="analyze-preview-confirm",
+        )
+    if st.button(
+        translate(locale, "action.cancel"),
+        key="analyze-preview-cancel",
+    ):
+        cancel_extraction(st.session_state)
+        st.rerun()
+    if confirm:
+        payload = build_confirmed_job_payload(
+            extracted,
+            company=company,
+            title=title,
+            location=location,
+            url=url,
+            posting_date=posting_date,
+            description=description,
+        )
+        st.session_state["analyze.last_job"] = client.post("/api/v1/jobs", payload)
+        cancel_extraction(st.session_state)
+        st.rerun()
+
+
 def render_page(client: RoleRadarClient, locale: Locale) -> None:
     st.title(translate(locale, "page.analyze.title"))
     st.caption(translate(locale, "page.analyze.support"))
-    link_tab, text_tab = st.tabs(
-        [translate(locale, "job.intake.job_link"), translate(locale, "job.intake.paste_job_text")]
-    )
-    with link_tab:
-        st.subheader(translate(locale, "job.intake.analyze_from_url"))
-        st.caption(translate(locale, "job.intake.url_help"))
-        with st.form("analyze-url-form", clear_on_submit=True):
-            job_url = st.text_input(translate(locale, "form.job_url"))
-            submitted = st.form_submit_button(
-                translate(locale, "action.save_and_analyze"), type="primary"
-            )
-        if submitted:
-            with st.spinner(translate(locale, "job.intake.reading_page")):
-                st.session_state["analyze.last_job"] = client.post(
-                    "/api/v1/jobs/from-url", {"url": job_url}
+    extracted = st.session_state.get("analyze.extracted_job")
+    if extracted is not None:
+        _render_preview(client, locale, extracted)
+    else:
+        link_tab, text_tab = st.tabs(
+            [
+                translate(locale, "job.intake.job_link"),
+                translate(locale, "job.intake.paste_job_text"),
+            ]
+        )
+        with link_tab:
+            st.subheader(translate(locale, "job.intake.analyze_from_url"))
+            st.caption(translate(locale, "job.intake.url_help"))
+            with st.form("analyze-url-form", clear_on_submit=True):
+                job_url = st.text_input(translate(locale, "form.job_url"), key="analyze-url")
+                submitted = st.form_submit_button(
+                    translate(locale, "action.extract_fields"),
+                    type="primary",
+                    key="analyze-url-submit",
                 )
+            if submitted:
+                with st.spinner(translate(locale, "job.intake.reading_page")):
+                    st.session_state["analyze.source_url"] = job_url
+                    st.session_state["analyze.extracted_job"] = client.post(
+                        "/api/v1/jobs/extract-url", {"url": job_url}
+                    )
+                st.rerun()
 
-    with text_tab:
-        st.subheader(translate(locale, "job.intake.paste_complete_posting"))
-        st.caption(translate(locale, "job.intake.review_before_save"))
-        extracted = st.session_state.get("analyze.extracted_job")
-        if extracted is None:
+        with text_tab:
+            st.subheader(translate(locale, "job.intake.paste_complete_posting"))
+            st.caption(translate(locale, "job.intake.review_before_save"))
             with st.form("analyze-extract-form"):
                 raw_text = st.text_area(
                     translate(locale, "job.intake.paste_job_text"),
                     value=str(st.session_state.get("analyze.raw_text", "")),
                     height=420,
+                    key="analyze-text",
                 )
                 extract = st.form_submit_button(
-                    translate(locale, "action.extract_fields"), type="primary"
+                    translate(locale, "action.extract_fields"),
+                    type="primary",
+                    key="analyze-text-submit",
                 )
             if extract:
                 st.session_state["analyze.raw_text"] = raw_text
-                st.session_state["analyze.extracted_job"] = client.post(
-                    "/api/v1/jobs/extract", {"text": raw_text}
-                )
-                st.rerun()
-        else:
-            st.info(translate(locale, "job.review.nothing_saved"))
-            with st.form("analyze-preview-form"):
-                company = st.text_input(translate(locale, "form.company"), extracted["company"])
-                title = st.text_input(translate(locale, "form.title"), extracted["title"])
-                location = st.text_input(translate(locale, "form.location"), extracted["location"])
-                url = st.text_input(translate(locale, "form.job_url"), extracted.get("url") or "")
-                posting_date = st.date_input(
-                    translate(locale, "job.review.posting_date"),
-                    value=_posting_date(extracted.get("posting_date")),
-                )
-                description = st.text_area(
-                    translate(locale, "form.description"), extracted["description"], height=360
-                )
-                confirm = st.form_submit_button(
-                    translate(locale, "job.review.confirm_and_analyze"), type="primary"
-                )
-            if st.button(
-                translate(locale, "action.cancel"),
-                key=stable_key("analyze-preview", "cancel"),
-            ):
-                cancel_extraction(st.session_state)
-                st.rerun()
-            if confirm:
-                payload = build_confirmed_job_payload(
-                    extracted,
-                    company=company,
-                    title=title,
-                    location=location,
-                    url=url,
-                    posting_date=posting_date,
-                    description=description,
-                )
-                st.session_state["analyze.last_job"] = client.post("/api/v1/jobs", payload)
-                cancel_extraction(st.session_state)
+                with st.spinner(translate(locale, "component.loading")):
+                    st.session_state["analyze.extracted_job"] = client.post(
+                        "/api/v1/jobs/extract", {"text": raw_text}
+                    )
                 st.rerun()
 
     completed = st.session_state.get("analyze.last_job")

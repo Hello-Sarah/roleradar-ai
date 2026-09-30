@@ -5,7 +5,7 @@ from __future__ import annotations
 import streamlit as st
 
 from app.dashboard.client import RoleRadarClient
-from app.dashboard.components.job_card import render_job_card
+from app.dashboard.components.job_card import analysis_signal_label, render_job_card
 from app.dashboard.components.states import render_state
 from app.dashboard.state import format_local_date
 from app.i18n.service import translate
@@ -31,6 +31,29 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
         elif key == "digest.high_priority_new_jobs":
             for job in values:
                 render_job_card(job, region="digest", locale=locale, client=client)
+        elif key == "digest.emerging_skills":
+            for gap, count in values:
+                st.write(
+                    "• "
+                    + translate(
+                        locale,
+                        "digest.skill_count",
+                        skill=analysis_signal_label(locale, gap, gap=True),
+                        count=count,
+                    )
+                )
+        elif key == "digest.hiring_trends":
+            for trend in values:
+                category_key = "role_category." + trend["category"].casefold().replace(" ", "_")
+                st.write(
+                    "• "
+                    + translate(
+                        locale,
+                        "digest.role_count",
+                        category=translate(locale, category_key),
+                        count=trend["new_roles"],
+                    )
+                )
         else:
             for value in values:
                 st.write(f"• {value}")

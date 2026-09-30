@@ -80,6 +80,13 @@ def test_explicit_locale_persists_without_changing_route_state() -> None:
     assert resolve_ui_locale(None, None, "fr-FR") == "en"
 
 
+def test_fresh_session_restores_explicit_locale_from_browser_cookie() -> None:
+    """Catch a canonical base-URL reopen falling back to browser language."""
+    from app.dashboard.state import resolve_ui_locale
+
+    assert resolve_ui_locale(None, None, "en-US", "zh-Hans") == "zh-Hans"
+
+
 @pytest.mark.parametrize(
     ("locale", "expected"),
     [("en", "Sep 3, 2026"), ("zh-Hans", "2026年9月3日")],
@@ -393,6 +400,22 @@ def test_job_selection_updates_copilot_context_without_touching_durable_state() 
     select_job_context(session, 17)
 
     assert session == {"ui.route": "jobs", "ui.selected_job_id": 17}
+
+
+def test_route_change_clears_stale_record_context_but_same_route_keeps_it() -> None:
+    from app.dashboard.state import apply_route_selection
+
+    session = {
+        "ui.route": "jobs",
+        "ui.selected_job_id": 17,
+        "ui.selected_company_id": 9,
+    }
+
+    apply_route_selection("jobs", "jobs", session)
+    assert session["ui.selected_job_id"] == 17
+
+    apply_route_selection("jobs", "profile", session)
+    assert session == {"ui.route": "profile"}
 
 
 def test_api_client_accepts_empty_no_content_response(monkeypatch) -> None:

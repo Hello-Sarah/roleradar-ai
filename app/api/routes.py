@@ -151,6 +151,17 @@ def preview_job_extraction(payload: JobPasteCreate) -> JobCreate:
     return extract_job_from_text(payload.text)
 
 
+@router.post("/jobs/extract-url", response_model=JobCreate)
+def preview_job_url_extraction(payload: JobUrlCreate) -> JobCreate:
+    """Fetch editable URL fields without writing a job to the database."""
+    try:
+        return fetch_job_from_url(str(payload.url))
+    except JobPageFetchError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+
+
 @router.post("/jobs/from-url", response_model=JobRead, status_code=status.HTTP_201_CREATED)
 def create_job_from_url(payload: JobUrlCreate, db: Db, settings: AppSettings) -> JobRead:
     """Fetch, persist, and analyze a publicly accessible job posting URL."""

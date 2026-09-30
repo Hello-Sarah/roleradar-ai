@@ -16,6 +16,38 @@ _STATUS_KEYS = {
     status.value: f"application_status.{status.value.casefold()}" for status in ApplicationStatus
 }
 
+_GAP_DIMENSIONS = {
+    "AI_DEPTH_EVIDENCE_WEAK": "score.ai_depth",
+    "OWNERSHIP_EVIDENCE_WEAK": "score.ownership",
+    "BUILD_AND_SHIP_EVIDENCE_WEAK": "score.build_ship",
+    "PRODUCT_EXPOSURE_EVIDENCE_WEAK": "score.product_exposure",
+    "TECHNICAL_EXPOSURE_EVIDENCE_WEAK": "score.technical_exposure",
+    "CAREER_OPTION_VALUE_EVIDENCE_WEAK": "score.career_option_value",
+}
+_ANALYSIS_SIGNAL_KEYS = {
+    "NO_MATCHED_GREEN_FLAGS": "analysis.no_strength_signals",
+    "NO_WEAK_DIMENSIONS": "analysis.no_gap_signals",
+}
+
+
+def analysis_signal_label(locale: Locale, value: str, *, gap: bool = False) -> str:
+    """Present analysis machine codes in the active locale."""
+    if value in _ANALYSIS_SIGNAL_KEYS:
+        return translate(locale, _ANALYSIS_SIGNAL_KEYS[value])
+    if gap and value in _GAP_DIMENSIONS:
+        return translate(
+            locale,
+            "analysis.weak_evidence",
+            dimension=translate(locale, _GAP_DIMENSIONS[value]),
+        )
+    prefix = "score.red_flag." if gap else "score.green_flag."
+    key = f"{prefix}{value.casefold()}"
+    try:
+        return translate(locale, key)
+    except KeyError:
+        # Unknown model codes remain safe presentation text, never raw machine tokens.
+        return value.replace("_", " ").capitalize()
+
 
 def recommendation_label(locale: Locale, score: int | None) -> str:
     if score is None:
@@ -48,7 +80,14 @@ def render_job_card(
         st.subheader(f"{job['company']} — {job['title']}")
         st.caption(f"{job['location']} · {score if score is not None else '—'}/100")
         if analysis:
-            st.write(analysis.get("summary") or translate(locale, "analysis.analysis_pending"))
+            st.write(
+                translate(
+                    locale,
+                    "analysis.summary",
+                    score=score if score is not None else "—",
+                    recommendation=decision,
+                )
+            )
             evidence = analysis.get("evidence") or []
             if evidence:
                 with st.expander(translate(locale, "analysis.evidence")):
@@ -57,10 +96,22 @@ def render_job_card(
             strengths, gaps = st.columns(2)
             with strengths:
                 st.markdown(f"**{translate(locale, 'analysis.strengths')}**")
-                st.write(", ".join(analysis.get("strengths") or []) or "—")
+                st.write(
+                    ", ".join(
+                        analysis_signal_label(locale, item)
+                        for item in analysis.get("strengths") or []
+                    )
+                    or "—"
+                )
             with gaps:
                 st.markdown(f"**{translate(locale, 'analysis.gaps')}**")
-                st.write(", ".join(analysis.get("gaps") or []) or "—")
+                st.write(
+                    ", ".join(
+                        analysis_signal_label(locale, item, gap=True)
+                        for item in analysis.get("gaps") or []
+                    )
+                    or "—"
+                )
         confidence = float(classification.get("confidence", 0))
         warning = low_confidence_label(locale, confidence)
         if warning:

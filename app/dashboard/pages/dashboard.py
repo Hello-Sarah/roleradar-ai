@@ -6,8 +6,9 @@ import pandas as pd
 import streamlit as st
 
 from app.dashboard.client import RoleRadarClient
-from app.dashboard.components.job_card import render_job_card
+from app.dashboard.components.job_card import analysis_signal_label, render_job_card
 from app.dashboard.components.states import render_state
+from app.dashboard.state import apply_job_filter, format_local_date
 from app.i18n.service import translate
 from app.schemas import Locale
 
@@ -18,10 +19,24 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
     data = client.get("/api/v1/dashboard")
     counts = data["status_counts"]
     metrics = st.columns(4)
-    metrics[0].metric(translate(locale, "dashboard.high_priority"), len(data["high_priority_jobs"]))
-    metrics[1].metric(translate(locale, "dashboard.new"), counts.get("New", 0))
-    metrics[2].metric(translate(locale, "application_status.applied"), counts.get("Applied", 0))
-    metrics[3].metric(translate(locale, "dashboard.interviews"), counts.get("Interview", 0))
+    metric_specs = (
+        ("high", "dashboard.high_priority", len(data["high_priority_jobs"]), None, 75),
+        ("new", "dashboard.new", counts.get("New", 0), "New", None),
+        ("applied", "application_status.applied", counts.get("Applied", 0), "Applied", None),
+        ("interview", "dashboard.interviews", counts.get("Interview", 0), "Interview", None),
+    )
+    for column, (slug, label_key, value, status, minimum_score) in zip(
+        metrics, metric_specs, strict=True
+    ):
+        with column:
+            st.metric(translate(locale, label_key), value)
+            if st.button(
+                translate(locale, "dashboard.view_records"),
+                key=f"dashboard-drill-{slug}",
+                use_container_width=True,
+            ):
+                apply_job_filter(st.session_state, status=status, minimum_score=minimum_score)
+                st.rerun()
     st.subheader(translate(locale, "dashboard.next_action"))
     if data["high_priority_jobs"]:
         render_job_card(
@@ -29,6 +44,23 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
         )
     else:
         render_state(locale, "empty", translate(locale, "dashboard.empty"))
+    st.subheader(translate(locale, "dashboard.follow_ups_due"))
+    if not data["due_follow_ups"]:
+        render_state(locale, "empty")
+    for follow_up in data["due_follow_ups"]:
+        job = follow_up["job"]
+        with st.container(border=True):
+            st.write(f"**{job['company']} — {job['title']}**")
+            st.caption(format_local_date(locale, follow_up["next_follow_up_date"]))
+            if follow_up.get("notes"):
+                st.write(follow_up["notes"])
+            if st.button(
+                translate(locale, "dashboard.view_records"),
+                key=f"dashboard-follow-up-{job['id']}",
+            ):
+                apply_job_filter(st.session_state, status=job["status"])
+                st.session_state["ui.selected_job_id"] = job["id"]
+                st.rerun()
     st.subheader(translate(locale, "dashboard.high_priority_jobs"))
     for job in data["high_priority_jobs"][1:]:
         render_job_card(job, region="dashboard-priority", locale=locale, client=client)
@@ -36,15 +68,39 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
     with charts[0]:
         st.subheader(translate(locale, "dashboard.skill_gap_trends"))
         if data["skill_gap_trends"]:
-            frame = pd.DataFrame(data["skill_gap_trends"], columns=["Skill", "Jobs"])
-            st.bar_chart(frame.set_index("Skill"))
+            localized_gaps = [
+                (analysis_signal_label(locale, gap, gap=True), count)
+                for gap, count in data["skill_gap_trends"]
+            ]
+            jobs_label = translate(locale, "dashboard.jobs_count")
+            frame = pd.DataFrame(localized_gaps, columns=["signal", jobs_label])
+            st.bar_chart(frame.set_index("signal").rename_axis(None))
+            if st.button(
+                translate(locale, "dashboard.view_records"),
+                key="dashboard-drill-skill-gap",
+                use_container_width=True,
+            ):
+                apply_job_filter(st.session_state, gap=data["skill_gap_trends"][0][0])
+                st.rerun()
         else:
             render_state(locale, "empty")
     with charts[1]:
         st.subheader(translate(locale, "dashboard.hiring_trends"))
         if data["weekly_hiring_trends"]:
-            frame = pd.DataFrame(data["weekly_hiring_trends"])
-            st.line_chart(frame.set_index("week")[["jobs"]])
+            frame = pd.DataFrame(data["weekly_hiring_trends"]).rename(
+                columns={"jobs": translate(locale, "dashboard.jobs_count")}
+            )
+            st.line_chart(frame.set_index("week")[[translate(locale, "dashboard.jobs_count")]])
+            if st.button(
+                translate(locale, "dashboard.view_records"),
+                key="dashboard-drill-hiring-trend",
+                use_container_width=True,
+            ):
+                apply_job_filter(
+                    st.session_state,
+                    created_week=data["weekly_hiring_trends"][-1]["week"],
+                )
+                st.rerun()
         else:
             render_state(locale, "empty")
     st.subheader(translate(locale, "dashboard.recently_added"))

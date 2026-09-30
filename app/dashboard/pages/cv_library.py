@@ -9,6 +9,7 @@ import streamlit as st
 
 from app.dashboard.client import RoleRadarClient
 from app.dashboard.components.states import render_state
+from app.dashboard.state import format_local_date
 from app.i18n.service import translate
 from app.schemas import Locale
 
@@ -43,7 +44,10 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
     for document in documents:
         with st.container(border=True):
             st.write(f"**{document['file_name']}**")
-            st.caption(f"{document['file_type'].upper()} · {document['modified_at'][:10]}")
+            st.caption(
+                f"{document['file_type'].upper()} · "
+                f"{format_local_date(locale, document['modified_at'])}"
+            )
     jobs = client.get("/api/v1/jobs")
     if not jobs:
         st.info(translate(locale, "cv.no_job_selected"))
@@ -53,7 +57,8 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
         selected = st.selectbox(translate(locale, "cv.target_job"), list(options))
         generate = st.form_submit_button(translate(locale, "cv.generate_tailored"), type="primary")
     if generate:
-        generated = client.post(f"/api/v1/jobs/{options[selected]}/tailored-cv", {})
+        with st.spinner(translate(locale, "component.loading")):
+            generated = client.post(f"/api/v1/jobs/{options[selected]}/tailored-cv", {})
         st.session_state["cv.generated"] = generated
     generated = st.session_state.get("cv.generated")
     if generated:

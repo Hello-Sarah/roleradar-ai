@@ -59,6 +59,41 @@ def test_application_record_timeline(client: TestClient) -> None:
     assert events.status_code == 200
     assert events.json()[0]["notes"] == "Submitted with employee referral."
     assert client.get(f"/api/v1/jobs/{job['id']}").json()["status"] == "Applied"
+    follow_ups = client.get("/api/v1/dashboard").json()["due_follow_ups"]
+    assert follow_ups == [
+        {
+            "job": client.get(f"/api/v1/jobs/{job['id']}").json(),
+            "next_follow_up_date": "2026-09-01",
+            "notes": "Submitted with employee referral.",
+        }
+    ]
+
+
+def test_newer_future_follow_up_supersedes_older_overdue_follow_up(
+    client: TestClient,
+) -> None:
+    """Catch an obsolete overdue reminder surviving a rescheduled follow-up."""
+    job = client.post(
+        "/api/v1/jobs",
+        json={**JOB, "url": "https://example.com/jobs/rescheduled-follow-up"},
+    ).json()
+    for occurred_at, follow_up_date, notes in (
+        ("2026-08-25T09:30:00+08:00", "2026-09-01", "Original reminder"),
+        ("2026-09-29T09:30:00+08:00", "2099-10-01", "Rescheduled reminder"),
+    ):
+        response = client.post(
+            f"/api/v1/jobs/{job['id']}/application-events",
+            json={
+                "status": "Applied",
+                "occurred_at": occurred_at,
+                "channel": "Company website",
+                "notes": notes,
+                "next_follow_up_date": follow_up_date,
+            },
+        )
+        assert response.status_code == 201
+
+    assert client.get("/api/v1/dashboard").json()["due_follow_ups"] == []
 
 
 def test_validation_rejects_short_description(client: TestClient) -> None:
@@ -151,6 +186,56 @@ def test_create_job_from_url(client: TestClient, monkeypatch) -> None:
     assert job["source"] == "job_url"
     assert job["analysis"]["fit_score"] >= 0
     assert len(client.get("/api/v1/jobs").json()) == 1
+
+
+def test_preview_job_from_url_stays_unsaved_until_edited_confirmation(
+    client: TestClient, monkeypatch
+) -> None:
+    extracted = JobCreate(
+        company="AWS",
+        title="Forward Deployed Engineer",
+        location="Hong Kong",
+        url="https://example.com/jobs/role-preview",
+        description=(
+            "Example Robotics needs an engineer to build customer AI systems using AWS, "
+            "Python, SQL, Docker, and evaluation tooling in production."
+        ),
+        source="job_url",
+    )
+    monkeypatch.setattr("app.api.routes.fetch_job_from_url", lambda _: extracted)
+
+    response = client.post(
+        "/api/v1/jobs/extract-url",
+        json={"url": "https://example.com/jobs/role-preview"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["company"] == "AWS"
+    assert client.get("/api/v1/jobs").json() == []
+
+    reviewed = response.json()
+    reviewed["company"] = "Example Robotics"
+    created = client.post("/api/v1/jobs", json=reviewed)
+
+    assert created.status_code == 201
+    jobs = client.get("/api/v1/jobs").json()
+    assert len(jobs) == 1
+    assert jobs[0]["company"] == "Example Robotics"
+
+
+def test_digest_returns_structured_trends_instead_of_english_system_prose(
+    client: TestClient,
+) -> None:
+    """Catch an English-only trend sentence crossing the API presentation boundary."""
+    created = client.post(
+        "/api/v1/jobs",
+        json={**JOB, "url": "https://example.com/jobs/digest-structured"},
+    )
+    assert created.status_code == 201
+
+    trends = client.get("/api/v1/digest/daily").json()["hiring_trends"]
+
+    assert trends == [{"category": "Applied AI Engineer", "new_roles": 1}]
 
 
 def test_cv_library_scan_endpoint(client: TestClient, tmp_path) -> None:
