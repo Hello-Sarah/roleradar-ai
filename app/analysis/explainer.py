@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -9,6 +9,8 @@ from app.schemas import CandidateProfileRead, ClassificationRead, JobCreate
 from app.scoring.v2 import CareerFitV2
 
 logger = logging.getLogger(__name__)
+
+ExplanationProvider = Callable[[dict[str, object], float | None], "LLMExplanation"]
 
 
 class LLMExplanation(BaseModel):
@@ -51,11 +53,12 @@ def explain_fit(
     classification: ClassificationRead,
     result: CareerFitV2,
     settings: Settings,
+    provider_call: ExplanationProvider | None = None,
+    timeout_seconds: float | None = None,
 ) -> tuple[LLMExplanation, str]:
     if not settings.ai_explanations_enabled or not settings.openai_api_key:
         return _fallback_summary(job, result), "deterministic-fallback"
 
-    client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
     prompt = {
         "instruction": (
             "Explain the already-computed score. Do not change or invent a score. "
@@ -79,6 +82,15 @@ def explain_fit(
         },
     }
     try:
+        if provider_call is not None:
+            return provider_call(prompt, timeout_seconds), settings.openai_model
+        client_options: dict[str, object] = {
+            "api_key": settings.openai_api_key,
+            "base_url": settings.openai_base_url,
+        }
+        if timeout_seconds is not None:
+            client_options["timeout"] = timeout_seconds
+        client = OpenAI(**client_options)
         response = client.responses.parse(
             model=settings.openai_model,
             input=[
