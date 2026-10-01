@@ -13,6 +13,37 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e '.[dev]'
+      - run: python -m playwright install --with-deps chromium webkit
+      - run: npm install --prefix "$RUNNER_TEMP/roleradar-node" axe-core@4.10.3
       - run: ruff check .
       - run: ruff format --check .
       - run: pytest
+      - name: Browser acceptance
+        env:
+          EVIDENCE_DIR: ${{ runner.temp }}/acceptance
+        run: >-
+          pytest tests/e2e --browser chromium --browser webkit
+          --tracing retain-on-failure
+          --output="$EVIDENCE_DIR/browser-results"
+      - name: Accessibility acceptance
+        env:
+          DATABASE_URL: sqlite:///${{ runner.temp }}/roleradar-a11y.sqlite3
+          AI_EXPLANATIONS_ENABLED: "false"
+          CV_LIBRARY_PATH: ${{ runner.temp }}/roleradar-a11y-cv
+          GENERATED_CV_PATH: ${{ runner.temp }}/roleradar-a11y-generated
+          API_BASE_URL: http://127.0.0.1:8000
+          ROLERADAR_NODE_MODULES: ${{ runner.temp }}/roleradar-node/node_modules
+        run: |
+          uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning &
+          API_PID=$!
+          streamlit run app/dashboard/streamlit_app.py --server.headless=true --server.address=127.0.0.1 --server.port=8501 &
+          UI_PID=$!
+          trap 'kill "$API_PID" "$UI_PID"' EXIT
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:8000/api/v1/health >/dev/null && \
+              curl --fail --silent http://127.0.0.1:8501/_stcore/health >/dev/null && break
+            sleep 1
+          done
+          node scripts/run_accessibility.mjs \
+            --base-url http://127.0.0.1:8501 \
+            --output "${{ runner.temp }}/acceptance/automated-tests/accessibility.json"

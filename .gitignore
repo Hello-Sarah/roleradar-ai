@@ -25,6 +25,7 @@ data/generated_cvs/
 private-evidence/
 release-evidence/
 portfolio/release-evidence/
+/artifacts/acceptance/
 
 # Local static-hosting output
 .pages/
