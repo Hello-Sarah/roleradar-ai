@@ -111,6 +111,10 @@ def test_language_choice_survives_refresh_and_reopen_without_database_changes(
         ).to_be_visible(timeout=20_000)
         page.get_by_text("中文", exact=True).click()
         expect(page.get_by_role("heading", name="把重要的职业决策排在前面。")).to_be_visible()
+        page.wait_for_function(
+            "document.cookie.includes('roleradar_locale=zh-Hans')",
+            timeout=10_000,
+        )
         page.reload()
         expect(page.get_by_role("heading", name="把重要的职业决策排在前面。")).to_be_visible()
         page.close()

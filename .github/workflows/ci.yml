@@ -18,6 +18,8 @@ jobs:
       - run: python -c "import streamlit; assert streamlit.__version__ == '1.62.0'"
       - run: python -m playwright install --with-deps chromium webkit
       - run: npm install --prefix "$RUNNER_TEMP/roleradar-node" axe-core@4.10.3
+      - name: Bind trusted Node executable
+        run: echo "ROLERADAR_TRUSTED_NODE_PATH=$(command -v node)" >> "$GITHUB_ENV"
       - name: Record Ruff
         run: >-
           python scripts/build_acceptance_bundle.py record
@@ -46,12 +48,15 @@ jobs:
         env:
           DATABASE_URL: sqlite:///${{ runner.temp }}/roleradar-a11y.sqlite3
           AI_EXPLANATIONS_ENABLED: "false"
+          OPENAI_API_KEY: mocked-accessibility-provider
           CV_LIBRARY_PATH: ${{ runner.temp }}/roleradar-a11y-cv
           GENERATED_CV_PATH: ${{ runner.temp }}/roleradar-a11y-generated
           API_BASE_URL: http://127.0.0.1:8000
           ROLERADAR_NODE_MODULES: ${{ runner.temp }}/roleradar-node/node_modules
         run: |
-          uvicorn app.main:app --host 127.0.0.1 --port 8000 --log-level warning &
+          mkdir -p "$CV_LIBRARY_PATH"
+          printf '%s\n' '[SYNTHETIC] Accessibility Candidate' 'Built evidence-grounded AI systems with Python and APIs.' > "$CV_LIBRARY_PATH/synthetic-redacted-cv.txt"
+          python scripts/run_synthetic_acceptance_api.py &
           API_PID=$!
           streamlit run app/dashboard/streamlit_app.py --server.headless=true --server.address=127.0.0.1 --server.port=8501 &
           UI_PID=$!
@@ -80,7 +85,7 @@ jobs:
             --source "$EVIDENCE_DIR" --commit "$COMMIT" --environment "GitHub Actions ubuntu-latest"
           python scripts/build_acceptance_bundle.py \
             --source "$EVIDENCE_DIR" --output-root "${{ runner.temp }}/artifacts/acceptance" \
-            --version v1 --model-id deterministic-release-v3 --prompt-version none \
-            --rubric-version eval-graders-v1 --dataset-version v1 \
+            --version v1 --model-id deterministic-release-v4 --prompt-version none \
+            --rubric-version eval-graders-v2 --dataset-version v1 \
             --browser-versions chromium=playwright-managed,webkit=playwright-managed \
             --node-version "$(node --version)"

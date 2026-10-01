@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from io import BytesIO
 from typing import Any
 from zipfile import BadZipFile, ZipFile
 
 from pydantic import BaseModel, Field
 
-GRADER_VERSION = "eval-graders-v1"
+GRADER_VERSION = "eval-graders-v2"
 
 
 class GraderResult(BaseModel):
@@ -45,6 +46,49 @@ def grade_evidence_ids(available_ids: set[str], referenced_ids: list[str]) -> Gr
     )
 
 
+def grade_critical_field_extraction(
+    expected: dict[str, Any], actual: dict[str, Any]
+) -> GraderResult:
+    fields = {"company", "title", "location", "url", "posting_date"}
+    mismatches = sum(actual.get(field) != expected.get(field) for field in fields)
+    missing = sum(field not in actual for field in fields)
+    return GraderResult(
+        name="critical_field_extraction",
+        passed=mismatches == 0,
+        metrics={
+            "field_count": len(fields),
+            "correct_fields": len(fields) - mismatches,
+            "mismatches": mismatches,
+            "missing_fields": missing,
+        },
+        zero_tolerance_failure=mismatches > 0,
+    )
+
+
+def grade_grounded_answer(
+    answer: str, *, required_facts: list[str], forbidden_facts: list[str]
+) -> GraderResult:
+    normalized = answer.casefold()
+    missing = sum(fact.casefold() not in normalized for fact in required_facts)
+    unsupported = sum(fact.casefold() in normalized for fact in forbidden_facts)
+    return GraderResult(
+        name="grounded_answer",
+        passed=bool(required_facts) and missing == 0 and unsupported == 0,
+        metrics={"missing_required_facts": missing, "unsupported_facts": unsupported},
+        zero_tolerance_failure=unsupported > 0,
+    )
+
+
+def grade_answer_language(answer: str, locale: str) -> GraderResult:
+    has_han = re.search(r"[\u3400-\u9fff]", answer) is not None
+    passed = has_han if locale == "zh-Hans" else not has_han
+    return GraderResult(
+        name="answer_language",
+        passed=passed,
+        metrics={"has_han_script": has_han},
+    )
+
+
 def grade_write_counts(*, actual: int, maximum: int) -> GraderResult:
     passed = actual <= maximum
     return GraderResult(
@@ -63,7 +107,12 @@ def grade_bilingual_parity(left: dict[str, Any], right: dict[str, Any]) -> Grade
         "available_evidence_ids",
         "evidence_ids",
     )
-    copilot_fields = ("action", "write_count")
+    copilot_fields = (
+        "action",
+        "write_count",
+        "answer_fact_ids",
+        "source_ids",
+    )
     cv_fields = ("source_claim_ids", "output_claim_ids", "docx_structure_valid")
     if any(field in left or field in right for field in jd_fields):
         fields = jd_fields

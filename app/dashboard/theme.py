@@ -56,7 +56,8 @@ def calm_intelligence_css() -> str:
     }
     .stButton > button[kind="primary"] p,
     .stButton > button[kind^="primary"] p,
-    .stFormSubmitButton > button[kind^="primary"] p { color: #FFFFFF !important; }
+    .stFormSubmitButton > button[kind^="primary"] p,
+    [data-testid="stBaseLinkButton-primary"] p { color: #FFFFFF !important; }
     .stButton > button:not([kind^="primary"]) p,
     .stFormSubmitButton > button:not([kind^="primary"]) p,
     [data-testid="stBaseButton-secondary"] p { color: #3A3A3C !important; }

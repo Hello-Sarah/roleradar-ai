@@ -81,6 +81,30 @@ ACCEPTANCE_FIELDS = {
     "must",
 }
 REVIEWED_STREAMLIT_VERSION = "1.62.0"
+EXPECTED_ACCESSIBILITY_ROUTES = {
+    "Dashboard",
+    "Analyze Job",
+    "Jobs",
+    "Applications",
+    "Watch List",
+    "CV Library",
+    "Digest",
+    "Profile",
+}
+EXPECTED_DYNAMIC_STATES = {
+    "extracted-review",
+    "analyzed-job",
+    "status-change",
+    "application-event",
+    "watchlist-form",
+    "cv-scan",
+    "cv-generation",
+    "copilot-context",
+    "copilot-session",
+    "copilot-proposal",
+    "copilot-cancelled",
+    "copilot-confirmed",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,10 +146,19 @@ def _trusted_executable(name: str) -> Path:
         candidate = Path(sys.executable).absolute().parent / tool
         if candidate.is_file():
             return candidate.absolute()
-    resolved = shutil.which(tool)
-    if resolved is None:
-        raise RuntimeError(f"approved executable is unavailable: {tool}")
-    return Path(resolved).resolve()
+    if tool == "node":
+        configured = os.environ.get("ROLERADAR_TRUSTED_NODE_PATH")
+        candidates = [
+            Path(configured).expanduser() if configured else None,
+            REPO_ROOT / ".tools" / "node" / "bin" / "node",
+            Path("/opt/homebrew/bin/node"),
+            Path("/usr/local/bin/node"),
+            Path("/usr/bin/node"),
+        ]
+        for candidate in candidates:
+            if candidate is not None and candidate.is_absolute() and candidate.is_file():
+                return candidate.resolve()
+    raise RuntimeError(f"approved executable is unavailable: {tool}")
 
 
 def _resolve_requested_executable(executable: str) -> Path:
@@ -280,6 +313,8 @@ def validate_release_manifest(
 ) -> ManifestValidation:
     """Validate the release gate against real files rather than trusting claimed status."""
     errors: list[str] = []
+    if manifest.get("schema_version") != 2:
+        errors.append("unsupported acceptance manifest schema")
     commit = manifest.get("git_commit")
     if not isinstance(commit, str) or not FULL_SHA_PATTERN.fullmatch(commit):
         errors.append("manifest commit is not a full Git SHA")
@@ -301,6 +336,14 @@ def validate_release_manifest(
     if not isinstance(commands, list):
         errors.append("invalid command results")
         commands = []
+    command_results_path = bundle_dir / "command-results.json"
+    try:
+        recorded_commands = _load_json(command_results_path)
+    except (OSError, json.JSONDecodeError):
+        recorded_commands = None
+        errors.append("invalid command-results.json")
+    if recorded_commands != commands:
+        errors.append("manifest commands do not match hashed command-results.json")
     command_names = [
         str(command.get("name"))
         for command in commands or []
@@ -315,6 +358,13 @@ def validate_release_manifest(
         for command in commands or []
         if isinstance(command, dict) and command.get("name")
     }
+    browser_result_path = bundle_dir / "automated-tests" / "e2e-results.json"
+    try:
+        browser_result = _load_json(browser_result_path)
+    except (OSError, json.JSONDecodeError):
+        browser_result = None
+    if browser_result != command_by_name.get("e2e"):
+        errors.append("browser result does not match recorded command")
     seen_command_times: set[str] = set()
     for name in REQUIRED_COMMANDS:
         command = command_by_name.get(name)
@@ -323,6 +373,8 @@ def validate_release_manifest(
             continue
         if command.get("exit_code") != 0:
             errors.append(f"required command failed: {name}")
+        if not isinstance(command.get("stdout"), str) or not isinstance(command.get("stderr"), str):
+            errors.append(f"command output streams are missing: {name}")
         if not _canonical_command(name, command.get("command"), command.get("evidence_source")):
             errors.append(f"non-canonical command: {name}")
         try:
@@ -335,12 +387,11 @@ def validate_release_manifest(
             command_parts = shlex.split(str(command.get("command", "")))
         except ValueError:
             command_parts = []
-        try:
-            requested_path = (
-                _resolve_requested_executable(command_parts[0]) if command_parts else None
-            )
-        except RuntimeError:
-            requested_path = None
+        requested = Path(command_parts[0]).expanduser() if command_parts else None
+        if requested is not None and requested.parent == Path("."):
+            requested_path = Path(expected_executable["path"]) if expected_executable else None
+        else:
+            requested_path = requested.resolve() if requested is not None else None
         if (
             expected_executable is None
             or requested_path is None
@@ -414,6 +465,31 @@ def validate_release_manifest(
                 errors.append("Eval prompt version does not match manifest")
             if eval_summary.get("grader_version") != manifest.get("rubric_version"):
                 errors.append("Eval grader version does not match manifest")
+            eval_items_path = bundle_dir / "automated-tests" / "eval-items.jsonl"
+            try:
+                eval_rows = [
+                    json.loads(line)
+                    for line in eval_items_path.read_text(encoding="utf-8").splitlines()
+                    if line
+                ]
+            except (OSError, json.JSONDecodeError):
+                eval_rows = []
+            observed_counts: dict[str, int] = {}
+            item_ids: list[str] = []
+            for row in eval_rows:
+                suite = str(row.get("suite")) if isinstance(row, dict) else ""
+                observed_counts[suite] = observed_counts.get(suite, 0) + 1
+                item_ids.append(str(row.get("item_id")) if isinstance(row, dict) else "")
+            if (
+                len(eval_rows) != eval_summary.get("item_count")
+                or observed_counts != eval_summary.get("suite_counts")
+                or len(item_ids) != len(set(item_ids))
+                or any(not item_id for item_id in item_ids)
+                or any(
+                    not isinstance(row, dict) or row.get("passed") is not True for row in eval_rows
+                )
+            ):
+                errors.append("Eval item inventory does not match summary")
 
     accessibility_path = bundle_dir / "automated-tests" / "accessibility.json"
     if accessibility_path.is_file():
@@ -428,6 +504,33 @@ def validate_release_manifest(
                 )
             if accessibility.get("passed") is not True:
                 errors.append("accessibility report did not pass")
+            routes = accessibility.get("routes")
+            route_names = {
+                str(route.get("route")) for route in routes or [] if isinstance(route, dict)
+            }
+            if not isinstance(routes, list) or route_names != EXPECTED_ACCESSIBILITY_ROUTES:
+                errors.append("accessibility route inventory is incomplete")
+            dynamic_states = accessibility.get("dynamic_states")
+            state_names = {
+                str(state.get("state")) for state in dynamic_states or [] if isinstance(state, dict)
+            }
+            if (
+                not isinstance(dynamic_states, list)
+                or state_names != EXPECTED_DYNAMIC_STATES
+                or accessibility.get("missing_dynamic_states") != []
+            ):
+                errors.append("accessibility dynamic-state inventory is incomplete")
+            for item in [*(routes or []), *(dynamic_states or [])]:
+                keyboard = item.get("keyboard", {}) if isinstance(item, dict) else {}
+                activation = item.get("activation", {}) if isinstance(item, dict) else {}
+                if (
+                    keyboard.get("all_controls_reached") is not True
+                    or keyboard.get("all_controls_named") is not True
+                    or keyboard.get("all_focus_visible") is not True
+                    or activation.get("passed") is not True
+                ):
+                    errors.append("accessibility keyboard evidence is incomplete")
+                    break
     runtime = manifest.get("runtime")
     if not isinstance(runtime, dict) or runtime.get("streamlit") != REVIEWED_STREAMLIT_VERSION:
         errors.append(
@@ -435,7 +538,23 @@ def validate_release_manifest(
         )
 
     acceptance = manifest.get("acceptance")
+    acceptance_results_path = bundle_dir / "acceptance-results.json"
+    try:
+        recorded_acceptance = _load_json(acceptance_results_path)
+    except (OSError, json.JSONDecodeError):
+        recorded_acceptance = None
+        errors.append("invalid acceptance-results.json")
+    if recorded_acceptance != acceptance:
+        errors.append("manifest acceptance does not match hashed acceptance-results.json")
     catalog = _catalog()
+    pytest_report = bundle_dir / "automated-tests" / "pytest.xml"
+    try:
+        junit_root = ET.parse(pytest_report).getroot()
+        junit_cases = list(junit_root.iter("testcase"))
+    except (OSError, ET.ParseError):
+        junit_cases = []
+    if not junit_cases:
+        errors.append("pytest JUnit report contains no tests")
     if not isinstance(acceptance, list) or not acceptance:
         errors.append("missing acceptance records")
     else:
@@ -473,6 +592,20 @@ def validate_release_manifest(
             for relative_name in [*automated, *visual]:
                 if not (bundle_dir / relative_name).is_file():
                     errors.append(f"acceptance evidence is missing: {record_id}: {relative_name}")
+            criterion = catalog.get(record_id)
+            if criterion is not None:
+                expected_status, expected_actual, expected_automated = _criterion_result(
+                    record_id,
+                    criterion=criterion,
+                    source=bundle_dir,
+                    command_by_name=command_by_name,
+                )
+                if record.get("status") != expected_status:
+                    errors.append(f"acceptance status does not match evidence: {record_id}")
+                if record.get("actual_result") != expected_actual:
+                    errors.append(f"acceptance result does not match evidence: {record_id}")
+                if automated != expected_automated:
+                    errors.append(f"acceptance evidence mapping does not match: {record_id}")
 
     for defect in manifest.get("open_defects", []):
         if isinstance(defect, dict) and defect.get("severity") in {"P0", "P1"}:
@@ -562,7 +695,11 @@ def _eval_check_result(
         )
 
     selectors: dict[str, tuple[str, set[str], Any]] = {
-        "jd-evidence-ids": ("jd", {"evidence_ids"}, lambda _row: True),
+        "jd-evidence-ids": (
+            "jd",
+            {"evidence_ids", "critical_field_extraction"},
+            lambda _row: True,
+        ),
         "jd-pmo-detection": (
             "jd",
             {"expected_label"},
@@ -570,12 +707,19 @@ def _eval_check_result(
         ),
         "cv-factual-support": (
             "cv_pair",
-            {"cv_factual_support", "docx_structure"},
+            {"cv_factual_support", "docx_structure", "unsupported_claim_rejection"},
             lambda _row: True,
         ),
         "copilot-grounded-answer": (
             "copilot_normal",
-            {"schema", "expected_label", "evidence_ids"},
+            {
+                "schema",
+                "expected_label",
+                "evidence_ids",
+                "grounded_answer",
+                "answer_language",
+                "bilingual_parity",
+            },
             lambda row: row.get("output", {}).get("action") == "answer",
         ),
         "copilot-action-schema": (
@@ -613,15 +757,14 @@ def _eval_check_result(
     return "Pass" if failures == 0 else "Fail", f"items={len(selected)}, grader_failures={failures}"
 
 
-def _criterion_result(
+def _criterion_check_result(
     acceptance_id: str,
     *,
-    criterion: dict[str, Any],
+    check: dict[str, Any],
     source: Path,
     command_by_name: dict[str, dict[str, Any]],
 ) -> tuple[str, str, list[str]]:
     """Evaluate one criterion from its own machine-readable gate evidence."""
-    check = criterion.get("automated_check")
     if not isinstance(check, dict) or not isinstance(check.get("name"), str):
         return "Blocked", f"{acceptance_id} has no named automated check", []
     kind = check.get("kind")
@@ -683,13 +826,25 @@ def _criterion_result(
             stdout = str(_load_json(report_path).get("stdout", ""))
         except (OSError, json.JSONDecodeError, AttributeError):
             return "Blocked", f"{acceptance_id} browser result is invalid", evidence
-        if check_name not in stdout:
+        browser_passes = {
+            browser: any(
+                check_name in line and f"[{browser}" in line and "PASSED" in line
+                for line in stdout.splitlines()
+            )
+            for browser in ("chromium", "webkit")
+        }
+        if not all(browser_passes.values()):
             return (
                 "Blocked",
-                f"{acceptance_id} named browser check was not executed: {check_name}",
+                f"{acceptance_id} named browser check did not pass in both browsers: "
+                f"{check_name}; {browser_passes}",
                 evidence,
             )
-        return "Pass", f"{acceptance_id} named browser check passed: {check_name}", evidence
+        return (
+            "Pass",
+            f"{acceptance_id} named browser check passed in Chromium and WebKit: {check_name}",
+            evidence,
+        )
     if kind != "pytest":
         return "Blocked", f"{acceptance_id} has unknown check kind: {kind}", []
     evidence = ["automated-tests/pytest.xml"]
@@ -716,6 +871,33 @@ def _criterion_result(
         f"{acceptance_id} named pytest check {check_name}: cases={len(matches)}, failed={failed}",
         evidence,
     )
+
+
+def _criterion_result(
+    acceptance_id: str,
+    *,
+    criterion: dict[str, Any],
+    source: Path,
+    command_by_name: dict[str, dict[str, Any]],
+) -> tuple[str, str, list[str]]:
+    checks = [criterion.get("automated_check"), *criterion.get("additional_checks", [])]
+    results = [
+        _criterion_check_result(
+            acceptance_id,
+            check=check,
+            source=source,
+            command_by_name=command_by_name,
+        )
+        for check in checks
+        if isinstance(check, dict)
+    ]
+    if not results:
+        return "Blocked", f"{acceptance_id} has no named automated checks", []
+    statuses = [status for status, _detail, _evidence in results]
+    status = "Fail" if "Fail" in statuses else ("Blocked" if "Blocked" in statuses else "Pass")
+    detail = " | ".join(detail for _status, detail, _evidence in results)
+    evidence = list(dict.fromkeys(path for _status, _detail, paths in results for path in paths))
+    return status, detail, evidence
 
 
 def write_acceptance_results(*, source: Path, commit: str, environment: str) -> Path:
@@ -773,8 +955,14 @@ def write_acceptance_results(*, source: Path, commit: str, environment: str) -> 
                 "requirement": f"V1 acceptance criterion {acceptance_id}",
                 "preconditions": "Clean candidate commit; isolated synthetic/redacted fixtures",
                 "steps": (
-                    "Run named check "
-                    f"{criterion['automated_check']['name']} from the catalog for this commit"
+                    "Run every named check from the acceptance catalog for this commit: "
+                    + ", ".join(
+                        check["name"]
+                        for check in [
+                            criterion["automated_check"],
+                            *criterion.get("additional_checks", []),
+                        ]
+                    )
                 ),
                 "expected_result": "The criterion passes with fresh, hashed evidence",
                 "automated_evidence": automated,
@@ -809,9 +997,17 @@ def record_command(
     commit = _git_output(cwd, "rev-parse", "HEAD")
     dirty = bool(_git_output(cwd, "status", "--porcelain"))
     commit_time = _git_output(cwd, "show", "-s", "--format=%cI", "HEAD")
-    resolved_executable = _resolve_requested_executable(command[0])
+    if name in REQUIRED_COMMANDS:
+        if not _canonical_command(name, shlex.join(command), str(source.resolve())):
+            raise ValueError(f"non-canonical command: {name}")
+        resolved_executable = _trusted_executable(name)
+    else:
+        resolved_executable = _resolve_requested_executable(command[0])
+    executed_command = [str(resolved_executable), *command[1:]]
     started_at = _utc_now()
-    completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
+    completed = subprocess.run(
+        executed_command, cwd=cwd, capture_output=True, text=True, check=False
+    )
     ended_at = _utc_now()
     result: dict[str, Any] = {
         "name": name,
@@ -824,14 +1020,17 @@ def record_command(
         "dirty_worktree": dirty,
         "commit_time": commit_time,
         "artifacts": list(COMMAND_OUTPUTS.get(name, (str(output_relative),))),
-        "executable": executable_identity(str(resolved_executable)),
+        "executable": executable_identity(
+            command[0], name=name if name in REQUIRED_COMMANDS else None
+        ),
         "argv": command[1:],
         "evidence_source": str(source.resolve()),
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
     }
     if output_path.suffix == ".json":
         output_path.write_text(
-            json.dumps({**result, "stdout": completed.stdout, "stderr": completed.stderr}, indent=2)
-            + "\n",
+            json.dumps(result, indent=2) + "\n",
             encoding="utf-8",
         )
     else:
@@ -932,7 +1131,7 @@ def build_bundle(args: argparse.Namespace) -> tuple[Path, ManifestValidation]:
             if path.is_file() and path.name not in {"manifest.json", "summary.md"}
         }
         manifest: dict[str, Any] = {
-            "schema_version": 1,
+            "schema_version": 2,
             "version": args.version,
             "git_commit": commit,
             "dirty_worktree": False,

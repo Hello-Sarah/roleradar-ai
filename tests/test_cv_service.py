@@ -61,6 +61,55 @@ def test_scan_preserves_source_bytes_and_never_initializes_a_model(
     assert hashlib.sha256(source_file.read_bytes()).hexdigest() == original_hash
 
 
+def test_scan_supported_formats_and_deactivates_removed_sources(db, tmp_path) -> None:
+    source = tmp_path / "cv-library"
+    source.mkdir()
+    (source / "profile.txt").write_text(
+        "Synthetic Candidate\nBuilt production AI systems with Python APIs for banking.",
+        encoding="utf-8",
+    )
+    document = Document()
+    document.add_paragraph(
+        "Synthetic Candidate built production AI systems with Python APIs for banking."
+    )
+    document.save(source / "profile.docx")
+    stream = (
+        b"BT /F1 12 Tf 72 720 Td (Synthetic Candidate built production AI systems "
+        b"with Python APIs for banking.) Tj ET"
+    )
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, body in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf.extend(f"{index} 0 obj\n".encode() + body + b"\nendobj\n")
+    xref = len(pdf)
+    pdf.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+    for offset in offsets[1:]:
+        pdf.extend(f"{offset:010d} 00000 n \n".encode())
+    pdf.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    )
+    (source / "profile.pdf").write_bytes(pdf)
+    settings = Settings(cv_library_path=str(source))
+
+    first = scan_cv_library(db, settings)
+    (source / "profile.pdf").unlink()
+    second = scan_cv_library(db, settings)
+
+    assert first.discovered == 3
+    assert {item.file_type for item in first.documents} == {"docx", "pdf", "txt"}
+    assert second.discovered == 2
+    assert {item.file_type for item in second.documents} == {"docx", "txt"}
+
+
 def _validated_content() -> TailoredCVContent:
     return TailoredCVContent(
         name=EvidenceBackedItem(text="Jane Doe", source_quote="Jane Doe"),

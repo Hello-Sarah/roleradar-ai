@@ -16,9 +16,12 @@ from app.evals.contracts import EvalDataset, EvalItem, load_dataset
 from app.evals.graders import (
     GRADER_VERSION,
     GraderResult,
+    grade_answer_language,
     grade_bilingual_parity,
+    grade_critical_field_extraction,
     grade_cv_case,
     grade_evidence_ids,
+    grade_grounded_answer,
     grade_schema,
     grade_score_stability,
     grade_write_counts,
@@ -65,6 +68,9 @@ def _grade_item(item: EvalItem, output: dict[str, Any]) -> list[GraderResult]:
             grade_evidence_ids(
                 set(output.get("available_evidence_ids", [])), output.get("evidence_ids", [])
             ),
+            grade_critical_field_extraction(
+                item.expected["extracted_fields"], output.get("extracted_fields", {})
+            ),
             _expected_match(item, output),
         ]
     if item.suite == "cv_pair":
@@ -80,32 +86,50 @@ def _grade_item(item: EvalItem, output: dict[str, Any]) -> list[GraderResult]:
             metrics={"valid": structure_valid},
             zero_tolerance_failure=not structure_valid,
         )
+        rejection = bool(output.get("unsupported_claim_rejected"))
         return [
             grade_schema(
                 output,
-                required_fields={"source_claim_ids", "output_claim_ids", "docx_structure_valid"},
+                required_fields={
+                    "source_claim_ids",
+                    "output_claim_ids",
+                    "docx_structure_valid",
+                    "unsupported_claim_rejected",
+                },
             ),
             factual,
             structure,
+            GraderResult(
+                name="unsupported_claim_rejection",
+                passed=rejection,
+                metrics={"rejected": rejection},
+                zero_tolerance_failure=not rejection,
+            ),
         ]
-    return [
+    results = [
         grade_schema(output, required_fields={"action", "write_count"}),
         _expected_match(item, output),
         grade_write_counts(
             actual=output.get("write_count", -1),
             maximum=item.expected["max_writes"],
         ),
-        *(
+    ]
+    if output.get("action") == "answer":
+        results.extend(
             [
                 grade_evidence_ids(
                     set(output.get("available_source_ids", [])),
                     output.get("source_ids", []),
-                )
+                ),
+                grade_grounded_answer(
+                    str(output.get("answer", "")),
+                    required_facts=item.expected.get("required_facts", []),
+                    forbidden_facts=item.expected.get("forbidden_facts", []),
+                ),
+                grade_answer_language(str(output.get("answer", "")), item.locale),
             ]
-            if output.get("action") == "answer"
-            else []
-        ),
-    ]
+        )
+    return results
 
 
 def _safe_output(output: dict[str, Any]) -> dict[str, Any]:
@@ -124,6 +148,8 @@ def _safe_output(output: dict[str, Any]) -> dict[str, Any]:
         "available_source_ids",
         "source_ids",
         "extracted_fields",
+        "unsupported_claim_rejected",
+        "answer_fact_ids",
     }
     return {key: output[key] for key in sorted(output.keys() & safe_fields)}
 

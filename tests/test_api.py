@@ -104,6 +104,30 @@ def test_application_record_timeline(client: TestClient) -> None:
     ]
 
 
+def test_invalid_application_event_is_atomic(client: TestClient) -> None:
+    job = client.post(
+        "/api/v1/jobs", json={**JOB, "url": "https://example.com/jobs/atomic-event"}
+    ).json()
+
+    invalid_date = client.post(
+        f"/api/v1/jobs/{job['id']}/application-events",
+        json={"status": "Applied", "occurred_at": "not-a-date", "notes": "synthetic"},
+    )
+    oversized = client.post(
+        f"/api/v1/jobs/{job['id']}/application-events",
+        json={
+            "status": "Applied",
+            "occurred_at": "2026-08-25T09:30:00+08:00",
+            "notes": "x" * 2_001,
+        },
+    )
+
+    assert invalid_date.status_code == 422
+    assert oversized.status_code == 422
+    assert client.get(f"/api/v1/jobs/{job['id']}/application-events").json() == []
+    assert client.get(f"/api/v1/jobs/{job['id']}").json()["status"] == "New"
+
+
 def test_newer_future_follow_up_supersedes_older_overdue_follow_up(
     client: TestClient,
 ) -> None:

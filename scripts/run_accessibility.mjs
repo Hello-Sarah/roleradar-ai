@@ -144,8 +144,14 @@ function buildReport({
     "analyzed-job",
     "application-event",
     "watchlist-form",
-    "copilot-panel",
+    "status-change",
+    "cv-scan",
+    "cv-generation",
+    "copilot-context",
     "copilot-session",
+    "copilot-proposal",
+    "copilot-cancelled",
+    "copilot-confirmed",
   ];
   const missingDynamicStates = base_url
     ? requiredDynamicStates.filter(
@@ -401,6 +407,31 @@ async function activateByKeyboard(locator, key = "Enter") {
   return focusVisible;
 }
 
+async function chooseOptionByKeyboard(locator, option) {
+  await locator.waitFor({ state: "visible" });
+  await locator.focus();
+  const focusVisible = await locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return (
+      document.activeElement === element &&
+      (style.outlineStyle !== "none" || style.outlineWidth !== "0px" || style.boxShadow !== "none")
+    );
+  });
+  await locator.press("ArrowDown");
+  await locator.page().keyboard.type(option);
+  await locator.page().keyboard.press("Enter");
+  await waitForStreamlit(locator.page());
+  await locator.page().waitForFunction(
+    ({ label, value }) =>
+      [...document.querySelectorAll('[role="combobox"]')].some(
+        (element) =>
+          element.getAttribute("aria-label") === label && element.value === value,
+      ),
+    { label: "Application status", value: option },
+  );
+  return focusVisible;
+}
+
 async function auditState(page, axeSource, state, activation) {
   await page.evaluate(axeSource);
   const result = await page.evaluate(async () =>
@@ -454,6 +485,15 @@ async function scanDynamicPrimaryLoop(page, axeSource) {
     }),
   );
 
+  const status = page.getByRole("combobox", { name: "Application status", exact: true }).last();
+  const statusFocus = await chooseOptionByKeyboard(status, "Saved");
+  states.push(
+    await auditState(page, axeSource, "status-change", {
+      control: "Application status",
+      passed: statusFocus && (await status.inputValue()) === "Saved",
+    }),
+  );
+
   const applications = page.getByRole("radio", { name: "Applications", exact: true });
   const applicationsFocus = await activateByKeyboard(applications, "Space");
   await page.getByRole("heading", { name: "Applications", exact: true }).waitFor();
@@ -483,12 +523,47 @@ async function scanDynamicPrimaryLoop(page, axeSource) {
     }),
   );
 
+  const cvLibrary = page.getByRole("radio", { name: "CV Library", exact: true });
+  const cvRouteFocus = await activateByKeyboard(cvLibrary, "Space");
+  await page.getByRole("heading", { name: "CV Library", exact: true }).waitFor();
+  const scanFocus = await activateByKeyboard(
+    page.getByRole("button", { name: "Scan CV folder", exact: true }),
+  );
+  await page.getByText("synthetic-redacted-cv.txt", { exact: true }).waitFor();
   states.push(
-    await auditState(page, axeSource, "copilot-panel", {
-      control: "Persistent Career Copilot panel",
-      passed: true,
+    await auditState(page, axeSource, "cv-scan", {
+      control: "Scan CV folder",
+      passed: cvRouteFocus && scanFocus,
     }),
   );
+  const generateFocus = await activateByKeyboard(
+    page.getByRole("button", { name: "Generate tailored CV", exact: true }),
+  );
+  await page.getByText("Generated CV #", { exact: false }).waitFor();
+  states.push(
+    await auditState(page, axeSource, "cv-generation", {
+      control: "Generate tailored CV",
+      passed: generateFocus,
+    }),
+  );
+
+  const jobs = page.getByRole("radio", { name: "Jobs", exact: true });
+  const jobsFocus = await activateByKeyboard(jobs, "Space");
+  await page.getByRole("heading", { name: "Jobs", exact: true }).waitFor();
+  const contextFocus = await activateByKeyboard(
+    page.getByRole("button", { name: "Open Career Copilot", exact: true }).first(),
+  );
+  await page
+    .getByText("Current context: Forward Deployed AI Engineer", { exact: false })
+    .last()
+    .waitFor();
+  states.push(
+    await auditState(page, axeSource, "copilot-context", {
+      control: "Open Career Copilot",
+      passed: jobsFocus && contextFocus,
+    }),
+  );
+
   const newSession = page.getByRole("button", { name: "New conversation", exact: true }).last();
   const sessionFocus = await activateByKeyboard(newSession);
   await page.getByRole("combobox", { name: "Conversation title", exact: true }).waitFor();
@@ -496,6 +571,42 @@ async function scanDynamicPrimaryLoop(page, axeSource) {
     await auditState(page, axeSource, "copilot-session", {
       control: "New conversation",
       passed: sessionFocus,
+    }),
+  );
+  const prompt = page
+    .getByPlaceholder("Ask about this context or propose an action", { exact: true })
+    .last();
+  await prompt.fill("Change status to Applied");
+  const promptFocus = await prompt.evaluate((element) => document.activeElement === element);
+  await page.keyboard.press("Enter");
+  await page.getByText("Review this proposed action", { exact: false }).last().waitFor();
+  states.push(
+    await auditState(page, axeSource, "copilot-proposal", {
+      control: "Copilot prompt",
+      passed: promptFocus,
+    }),
+  );
+  const cancelFocus = await activateByKeyboard(
+    page.getByRole("button", { name: "Cancel", exact: true }).last(),
+  );
+  await page.getByText("Review this proposed action", { exact: false }).last().waitFor({ state: "hidden" });
+  states.push(
+    await auditState(page, axeSource, "copilot-cancelled", {
+      control: "Cancel",
+      passed: cancelFocus,
+    }),
+  );
+  await prompt.fill("Change status to Applied");
+  await page.keyboard.press("Enter");
+  await page.getByText("Review this proposed action", { exact: false }).last().waitFor();
+  const confirmActionFocus = await activateByKeyboard(
+    page.getByRole("button", { name: "Confirm action", exact: true }).last(),
+  );
+  await page.getByText("Updated the application status", { exact: false }).last().waitFor();
+  states.push(
+    await auditState(page, axeSource, "copilot-confirmed", {
+      control: "Confirm action",
+      passed: confirmActionFocus,
     }),
   );
   return states;

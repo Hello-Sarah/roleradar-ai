@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import httpx
 import pytest
@@ -294,6 +295,14 @@ def test_page_registry_exposes_all_focused_v1_modules() -> None:
     assert all(callable(renderer) for renderer in page_renderers().values())
 
 
+def test_watchlist_page_states_source_boundary_without_monitoring_claim() -> None:
+    english = translate("en", "page.watchlist.support")
+    chinese = translate("zh-Hans", "page.watchlist.support")
+
+    assert "scheduled monitoring is not active" in english
+    assert "尚未启用定时监控" in chinese
+
+
 def test_cancel_extraction_discards_only_unsaved_preview() -> None:
     """Catch cancel persisting a job or resetting unrelated current-page state."""
     from app.dashboard.pages.analyze import cancel_extraction
@@ -488,6 +497,8 @@ def test_copilot_chat_avatars_do_not_depend_on_remote_icon_fonts() -> None:
 
     assert chat_avatar("user") == "🧑"
     assert chat_avatar("assistant") == "🤖"
+    source = Path("app/dashboard/components/copilot_panel.py").read_text(encoding="utf-8")
+    assert "st.chat_message" not in source
 
 
 def test_new_copilot_session_overrides_stale_selectbox_value() -> None:

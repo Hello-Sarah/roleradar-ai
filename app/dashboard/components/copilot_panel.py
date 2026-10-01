@@ -457,7 +457,8 @@ def _render_copilot_panel(
 
     messages = client.get(f"/api/v1/copilot/sessions/{session_id}/messages")
     for message in messages:
-        with st.chat_message(message["role"], avatar=chat_avatar(message["role"])):
+        with st.container(border=True):
+            st.caption(chat_avatar(message["role"]))
             st.write(message.get("body") or "—")
             for source in message.get("sources") or []:
                 st.caption(str(source))

@@ -20,6 +20,13 @@ def _item(item_id: str, suite: str = "jd", **overrides):
             "classification_label": "Applied AI Engineer",
             "score_range": [70, 85],
             "recommendation": "Strong Apply",
+            "extracted_fields": {
+                "company": "Synthetic Company",
+                "title": "Applied AI Engineer",
+                "location": "Hong Kong",
+                "url": None,
+                "posting_date": None,
+            },
         },
         "grader_version": "v1",
         "model_id": "deterministic",
@@ -71,6 +78,25 @@ def test_dataset_rejects_candidate_output_hidden_inside_input(
                     forbidden_key: ["[SYNTHETIC] Claimed candidate output."],
                 },
                 expected={"unsupported_claims": 0, "docx_required": True},
+            )
+        ],
+    )
+
+    with pytest.raises(DatasetValidationError, match="candidate output"):
+        load_dataset(supplied_output, enforce_minimums=False)
+
+
+def test_dataset_rejects_candidate_output_hidden_at_any_input_depth(tmp_path: Path) -> None:
+    supplied_output = tmp_path / "nested-supplied-output.jsonl"
+    _write(
+        supplied_output,
+        [
+            _item(
+                "nested-supplied",
+                input={
+                    "text": "[SYNTHETIC] Build applied AI systems.",
+                    "context": {"output_claims": ["oracle answer"]},
+                },
             )
         ],
     )

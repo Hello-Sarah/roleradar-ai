@@ -159,3 +159,28 @@ def test_missing_dynamic_keyboard_activation_blocks_release(tmp_path: Path) -> N
     assert completed.returncode == 1
     assert report["passed"] is False
     assert report["dynamic_keyboard_failure_count"] == 1
+
+
+def test_live_keyboard_runner_activates_every_dynamic_primary_action() -> None:
+    source = Path("scripts/run_accessibility.mjs").read_text(encoding="utf-8")
+
+    for state in (
+        "status-change",
+        "cv-scan",
+        "cv-generation",
+        "copilot-context",
+        "copilot-proposal",
+        "copilot-cancelled",
+        "copilot-confirmed",
+    ):
+        assert f'"{state}"' in source
+    for control in (
+        "Application status",
+        "Scan CV folder",
+        "Generate tailored CV",
+        "Open Career Copilot",
+        "Cancel",
+        "Confirm action",
+    ):
+        assert control in source
+    assert 'control: "Persistent Career Copilot panel",\n      passed: true' not in source

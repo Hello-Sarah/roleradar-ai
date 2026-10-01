@@ -21,6 +21,21 @@ class DatasetValidationError(ValueError):
     """Raised when a dataset is unsafe or violates the versioned contract."""
 
 
+def _find_forbidden_output_paths(value: Any, path: str = "input") -> list[str]:
+    forbidden = {"actual", "output", "output_claims"}
+    paths: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child = f"{path}.{key}"
+            if key in forbidden:
+                paths.append(child)
+            paths.extend(_find_forbidden_output_paths(item, child))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            paths.extend(_find_forbidden_output_paths(item, f"{path}[{index}]"))
+    return paths
+
+
 class EvalItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -42,11 +57,11 @@ class EvalItem(BaseModel):
     @model_validator(mode="after")
     def validate_suite_contract(self) -> EvalItem:
         errors: list[str] = []
-        forbidden_output_keys = {"actual", "output", "output_claims"}
-        supplied_output_keys = forbidden_output_keys.intersection(self.input)
-        if supplied_output_keys:
+        supplied_output_paths = _find_forbidden_output_paths(self.input)
+        if supplied_output_paths:
             errors.append(
-                "candidate output is forbidden in input: " + ", ".join(sorted(supplied_output_keys))
+                "candidate output is forbidden in input: "
+                + ", ".join(sorted(supplied_output_paths))
             )
         if not self.synthetic or self.redaction_marker not in {"[SYNTHETIC]", "[REDACTED]"}:
             errors.append("a synthetic/redaction marker is required")
@@ -67,6 +82,15 @@ class EvalItem(BaseModel):
                 errors.append("JD score_range must be two ordered values from 0 to 100")
             if not isinstance(self.expected.get("recommendation"), str):
                 errors.append("JD recommendation is required")
+            extracted = self.expected.get("extracted_fields")
+            if not isinstance(extracted, dict) or set(extracted) != {
+                "company",
+                "title",
+                "location",
+                "url",
+                "posting_date",
+            }:
+                errors.append("JD expected extracted_fields are required")
         elif self.suite == "cv_pair":
             if self.expected.get("unsupported_claims") != 0:
                 errors.append("CV unsupported_claims must be zero")
@@ -77,6 +101,15 @@ class EvalItem(BaseModel):
                 errors.append("Copilot action label is required")
             if not isinstance(self.expected.get("max_writes"), int):
                 errors.append("Copilot max_writes is required")
+            if self.expected.get("action") == "answer":
+                if self.expected.get("answer_language") != self.locale:
+                    errors.append("Copilot answer_language must match locale")
+                if not isinstance(
+                    self.expected.get("required_facts"), list
+                ) or not self.expected.get("required_facts"):
+                    errors.append("Copilot required_facts are required for answers")
+                if not isinstance(self.expected.get("forbidden_facts"), list):
+                    errors.append("Copilot forbidden_facts are required for answers")
         if self.release_critical and not self.pair_id:
             errors.append("release-critical item requires a bilingual pair")
         if errors:

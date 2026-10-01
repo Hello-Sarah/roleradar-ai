@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.build_acceptance_bundle as acceptance_bundle
 from scripts.build_acceptance_bundle import (
     executable_identity,
     record_command,
@@ -103,7 +104,13 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             "passed": True,
             "grader_results": [
                 {"name": name, "passed": True}
-                for name in ("schema", "score_stability", "evidence_ids", "expected_label")
+                for name in (
+                    "schema",
+                    "score_stability",
+                    "evidence_ids",
+                    "critical_field_extraction",
+                    "expected_label",
+                )
             ],
         },
         {
@@ -115,6 +122,7 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             "grader_results": [
                 {"name": "expected_label", "passed": True},
                 {"name": "evidence_ids", "passed": True},
+                {"name": "critical_field_extraction", "passed": True},
             ],
         },
         {
@@ -126,6 +134,7 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             "grader_results": [
                 {"name": "cv_factual_support", "passed": True},
                 {"name": "docx_structure", "passed": True},
+                {"name": "unsupported_claim_rejection", "passed": True},
             ],
         },
         {
@@ -138,6 +147,9 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
                 {"name": "schema", "passed": True},
                 {"name": "expected_label", "passed": True},
                 {"name": "evidence_ids", "passed": True},
+                {"name": "grounded_answer", "passed": True},
+                {"name": "answer_language", "passed": True},
+                {"name": "bilingual_parity", "passed": True},
             ],
         },
         {
@@ -165,10 +177,31 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             ],
         },
     ]
+    expected_suite_counts = {
+        "jd": 60,
+        "cv_pair": 20,
+        "copilot_normal": 30,
+        "copilot_adversarial": 20,
+    }
+    templates = {
+        suite: [row for row in eval_rows if row["suite"] == suite]
+        for suite in expected_suite_counts
+    }
+    expanded_rows = list(eval_rows)
+    for suite, expected_count in expected_suite_counts.items():
+        current = [row for row in expanded_rows if row["suite"] == suite]
+        for index in range(len(current), expected_count):
+            row = copy.deepcopy(templates[suite][index % len(templates[suite])])
+            row["item_id"] = f"{suite}-{index}"
+            expanded_rows.append(row)
+    eval_rows = expanded_rows
     (automated / "eval-items.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in eval_rows), encoding="utf-8"
     )
-    (automated / "coverage.xml").write_text("<coverage />", encoding="utf-8")
+    (automated / "coverage.xml").write_text(
+        '<coverage line-rate="0.87" lines-valid="100" lines-covered="87" />',
+        encoding="utf-8",
+    )
     commands_data = (
         ("ruff", "ruff check .", ("automated-tests/ruff.txt",)),
         ("format", "ruff format --check .", ("automated-tests/format.txt",)),
@@ -228,8 +261,15 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
                 "executable": identity,
                 "argv": command_parts[1:],
                 "evidence_source": "/tmp/bundle",
+                "stdout": "synthetic command output",
+                "stderr": "",
             }
         )
+    keyboard = {
+        "all_controls_reached": True,
+        "all_controls_named": True,
+        "all_focus_visible": True,
+    }
     (automated / "accessibility.json").write_text(
         json.dumps(
             {
@@ -239,6 +279,23 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
                 "unresolved_incomplete_count": 0,
                 "keyboard_failure_count": 0,
                 "dynamic_keyboard_failure_count": 0,
+                "missing_dynamic_states": [],
+                "routes": [
+                    {
+                        "route": route,
+                        "keyboard": keyboard,
+                        "activation": {"passed": True},
+                    }
+                    for route in acceptance_bundle.EXPECTED_ACCESSIBILITY_ROUTES
+                ],
+                "dynamic_states": [
+                    {
+                        "state": state,
+                        "keyboard": keyboard,
+                        "activation": {"passed": True},
+                    }
+                    for state in acceptance_bundle.EXPECTED_DYNAMIC_STATES
+                ],
             }
         ),
         encoding="utf-8",
@@ -248,45 +305,30 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     suite = ET.Element("testsuite", failures="0", errors="0")
     e2e_checks: list[str] = []
     for criterion in catalog:
-        check = criterion["automated_check"]
-        if check["kind"] == "pytest":
-            classname, name = check["name"].split("::", 1)
-            ET.SubElement(suite, "testcase", classname=classname, name=name)
-        if check["kind"] == "e2e":
-            e2e_checks.append(check["name"])
+        for check in [criterion["automated_check"], *criterion.get("additional_checks", [])]:
+            if check["kind"] == "pytest":
+                classname, name = check["name"].split("::", 1)
+                ET.SubElement(suite, "testcase", classname=classname, name=name)
+            if check["kind"] == "e2e":
+                e2e_checks.append(check["name"])
     ET.ElementTree(suite).write(automated / "pytest.xml", encoding="unicode")
-    (automated / "e2e-results.json").write_text(
-        json.dumps({"stdout": "\n".join(e2e_checks)}), encoding="utf-8"
+    browser_result = next(command for command in commands if command["name"] == "e2e")
+    browser_result["stdout"] = "\n".join(
+        f"{check}[{browser}] PASSED" for check in e2e_checks for browser in ("chromium", "webkit")
     )
-    acceptance = [
-        {
-            "id": criterion["id"],
-            "requirement": f"Criterion {criterion['id']}",
-            "preconditions": "Synthetic data",
-            "steps": "Run evidence",
-            "expected_result": "Pass",
-            "automated_evidence": ["automated-tests/pytest.xml"],
-            "visual_evidence": ["screenshots/en/chromium-dashboard.png"]
-            if criterion["visual_required"]
-            else [],
-            "actual_result": "Passed",
-            "status": "Pass",
-            "tested_at": ENDED_AT,
-            "environment": "test-os",
-            "commit": FULL_COMMIT,
-            "linked_defect": None,
-            "must": True,
-        }
-        for criterion in catalog
-    ]
-    (bundle / "acceptance-results.json").write_text(json.dumps(acceptance), encoding="utf-8")
+    (automated / "e2e-results.json").write_text(json.dumps(browser_result), encoding="utf-8")
+    (bundle / "command-results.json").write_text(json.dumps(commands), encoding="utf-8")
+    acceptance_path = write_acceptance_results(
+        source=bundle, commit=FULL_COMMIT, environment="test-os"
+    )
+    acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
     evidence_files = [
         path
         for path in bundle.rglob("*")
         if path.is_file() and path.name not in {"manifest.json", "summary.md"}
     ]
     manifest: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "version": "v1",
         "git_commit": FULL_COMMIT,
         "dirty_worktree": False,
@@ -399,14 +441,14 @@ def test_command_recorder_writes_structured_json_when_requested(tmp_path: Path) 
     _init_git_repo(tmp_path)
     result = record_command(
         source=tmp_path,
-        name="e2e",
+        name="focused-json",
         output_relative=Path("automated-tests/e2e-results.json"),
         command=["/bin/sh", "-c", "printf browser-pass"],
         cwd=tmp_path,
     )
 
     report = json.loads((tmp_path / "automated-tests" / "e2e-results.json").read_text())
-    assert report == {**result, "stdout": "browser-pass", "stderr": ""}
+    assert report == result
 
 
 def test_release_gate_rejects_command_substitution_and_missing_provenance(tmp_path: Path) -> None:
@@ -565,6 +607,116 @@ def test_release_gate_normalizes_the_approved_virtualenv_python_symlink(
     result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
 
     assert result.release_ready is True
+
+
+def test_trusted_gate_executables_ignore_attacker_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attacker = tmp_path / "attacker"
+    attacker.mkdir()
+    for name in ("ruff", "pytest", "node", "python", "python3"):
+        path = attacker / name
+        path.write_text("#!/bin/sh\necho attacker\n", encoding="utf-8")
+        path.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{attacker}:{os.environ['PATH']}")
+    acceptance_bundle._executable_identity_cached.cache_clear()
+
+    for gate in ("ruff", "format", "pytest", "e2e", "accessibility", "eval"):
+        identity = executable_identity("ignored", name=gate)
+        assert not identity["path"].startswith(str(attacker))
+
+
+def test_command_recorder_executes_trusted_binary_not_attacker_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_git_repo(tmp_path)
+    attacker = tmp_path / "attacker"
+    attacker.mkdir()
+    fake_ruff = attacker / "ruff"
+    fake_ruff.write_text("#!/bin/sh\necho ATTACKER-RUFF\n", encoding="utf-8")
+    fake_ruff.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{attacker}:{os.environ['PATH']}")
+    acceptance_bundle._executable_identity_cached.cache_clear()
+
+    result = record_command(
+        source=tmp_path,
+        name="ruff",
+        output_relative=Path("automated-tests/ruff.txt"),
+        command=["ruff", "check", "."],
+        cwd=tmp_path,
+    )
+
+    assert result["exit_code"] == 0
+    assert "ATTACKER-RUFF" not in result["stdout"]
+    assert not result["executable"]["path"].startswith(str(attacker))
+
+
+def test_release_gate_cross_checks_embedded_commands_and_acceptance(tmp_path: Path) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    manifest["commands"][0]["stdout"] = "substituted"
+    manifest["acceptance"][0]["actual_result"] = "substituted"
+
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+
+    assert result.release_ready is False
+    assert "manifest commands do not match hashed command-results.json" in result.errors
+    assert "manifest acceptance does not match hashed acceptance-results.json" in result.errors
+
+
+def test_release_gate_rejects_empty_rehashed_junit(tmp_path: Path) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    junit = bundle / "automated-tests" / "pytest.xml"
+    junit.write_text('<testsuite tests="0" failures="0" errors="0" />', encoding="utf-8")
+    manifest["hashes"]["automated-tests/pytest.xml"] = _sha256(junit)
+
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+
+    assert result.release_ready is False
+    assert "pytest JUnit report contains no tests" in result.errors
+
+
+def test_release_gate_rejects_truncated_rehashed_eval_items(tmp_path: Path) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    items = bundle / "automated-tests" / "eval-items.jsonl"
+    first = items.read_text(encoding="utf-8").splitlines()[0]
+    items.write_text(first + "\n", encoding="utf-8")
+    manifest["hashes"]["automated-tests/eval-items.jsonl"] = _sha256(items)
+
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+
+    assert result.release_ready is False
+    assert "Eval item inventory does not match summary" in result.errors
+
+
+def test_release_gate_rejects_rehashed_empty_accessibility_inventory(tmp_path: Path) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    report_path = bundle / "automated-tests" / "accessibility.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report.update(routes=[], dynamic_states=[], missing_dynamic_states=[])
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    manifest["hashes"]["automated-tests/accessibility.json"] = _sha256(report_path)
+
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+
+    assert result.release_ready is False
+    assert "accessibility route inventory is incomplete" in result.errors
+    assert "accessibility dynamic-state inventory is incomplete" in result.errors
+
+
+def test_release_gate_rejects_rehashed_browser_result_not_bound_to_command(
+    tmp_path: Path,
+) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    report_path = bundle / "automated-tests" / "e2e-results.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["stdout"] += "\nforged-browser-result[chromium] PASSED"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    manifest["hashes"]["automated-tests/e2e-results.json"] = _sha256(report_path)
+
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+
+    assert result.release_ready is False
+    assert "browser result does not match recorded command" in result.errors
 
 
 def test_acceptance_results_derive_status_from_criterion_specific_evidence(

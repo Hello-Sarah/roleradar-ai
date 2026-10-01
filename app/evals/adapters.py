@@ -15,7 +15,7 @@ from app.analysis.classifier import classify_job
 from app.config import Settings
 from app.copilot.actions import ActionProposalError
 from app.copilot.context import ContextJob, ContextSource, CopilotContext
-from app.copilot.service import answer_question, propose_action
+from app.copilot.service import GroundedAnswer, answer_question, propose_action
 from app.database.models import CVDocument, Job
 from app.database.session import Base
 from app.evals.contracts import EvalItem
@@ -23,6 +23,7 @@ from app.evals.graders import grade_docx_structure
 from app.ingestion.text_extractor import extract_job_from_text
 from app.scoring.v2 import JobEvidence, ProfileEvidence, score_job_v2
 from app.services.cv_service import (
+    CVLibraryError,
     EvidenceBackedItem,
     TailoredCVContent,
     TailoredCVSection,
@@ -41,7 +42,7 @@ class EvalAdapter(Protocol):
 class DeterministicReleaseAdapter:
     """Exercise the deterministic release paths without reading dataset oracle fields."""
 
-    model_id = "deterministic-release-v3"
+    model_id = "deterministic-release-v4"
     prompt_version = "none"
 
     def evaluate(self, item: EvalItem) -> dict[str, Any]:
@@ -49,7 +50,7 @@ class DeterministicReleaseAdapter:
             return self._evaluate_jd(item.input)
         if item.suite == "cv_pair":
             return self._evaluate_cv(item.input)
-        return self._evaluate_copilot(item.input)
+        return self._evaluate_copilot(item.input, item.locale)
 
     @staticmethod
     def _evaluate_jd(payload: dict[str, Any]) -> dict[str, Any]:
@@ -97,6 +98,7 @@ class DeterministicReleaseAdapter:
         source_ids = [f"source-{index}" for index in range(len(source_claims))]
         output_claim_ids = ["unsupported"]
         structure_valid = False
+        unsupported_claim_rejected = False
         try:
             with TemporaryDirectory(prefix="roleradar-eval-docx-") as directory:
                 root = Path(directory)
@@ -163,6 +165,43 @@ class DeterministicReleaseAdapter:
                         ]
                     finally:
                         discard_prepared_tailored_cv(prepared)
+                    invented = "[SYNTHETIC] Invented credential not present in source CV."
+
+                    def unsupported_provider(documents, _job, _settings):
+                        source = documents[0].extracted_text.splitlines()[0]
+                        return TailoredCVContent(
+                            name=EvidenceBackedItem(text=source, source_quote=source),
+                            headline=EvidenceBackedItem(
+                                text=invented,
+                                source_quote=invented,
+                            ),
+                            summary=[EvidenceBackedItem(text=source, source_quote=source)],
+                            skills=[EvidenceBackedItem(text=source, source_quote=source)],
+                            sections=[
+                                TailoredCVSection(
+                                    title="Experience",
+                                    items=[EvidenceBackedItem(text=source, source_quote=source)],
+                                )
+                            ],
+                        )
+
+                    try:
+                        unexpected = prepare_tailored_cv(
+                            db,
+                            job.id,
+                            Settings(
+                                generated_cv_path=str(root / "generated-negative-control"),
+                                cv_library_path=str(root / "library"),
+                                ai_explanations_enabled=False,
+                                openai_api_key=None,
+                            ),
+                            source_cv_ids=[document.id],
+                            content_provider=unsupported_provider,
+                        )
+                    except CVLibraryError:
+                        unsupported_claim_rejected = True
+                    else:
+                        discard_prepared_tailored_cv(unexpected)
                 engine.dispose()
         except Exception:
             # A production generation/validation failure is an observed Eval failure.
@@ -171,10 +210,11 @@ class DeterministicReleaseAdapter:
             "source_claim_ids": source_ids,
             "output_claim_ids": output_claim_ids,
             "docx_structure_valid": structure_valid,
+            "unsupported_claim_rejected": unsupported_claim_rejected,
         }
 
     @staticmethod
-    def _evaluate_copilot(payload: dict[str, Any]) -> dict[str, Any]:
+    def _evaluate_copilot(payload: dict[str, Any], locale: str) -> dict[str, Any]:
         context_payload = payload.get("context", {})
         context = CopilotContext(
             job=ContextJob(
@@ -190,10 +230,27 @@ class DeterministicReleaseAdapter:
             sources=[ContextSource(record_type="job", record_id=1, version="eval-v1")],
         )
         if payload.get("mode") == "answer" or "summarize" in str(payload["message"]).casefold():
+
+            def provider(_message, selected, _settings):
+                assert selected.job is not None
+                job = selected.job
+                if locale == "zh-Hans":
+                    text = (
+                        f"已选职位：{job.company} — {job.title}，地点：{job.location}。"
+                        f"来源证据：{job.description}"
+                    )
+                else:
+                    text = (
+                        f"Selected role: {job.company} — {job.title}; location: {job.location}. "
+                        f"Source evidence: {job.description}"
+                    )
+                return GroundedAnswer(answer=text, source_ids=[f"job:{job.id}"])
+
             answer = answer_question(
                 str(payload["message"]),
                 context,
                 Settings(ai_explanations_enabled=False, openai_api_key=None),
+                provider_call=provider,
             )
             if isinstance(answer, dict):
                 answer_text = str(answer["answer"])
@@ -207,6 +264,7 @@ class DeterministicReleaseAdapter:
                 "answer": answer_text,
                 "available_source_ids": ["job:1"],
                 "source_ids": source_ids,
+                "answer_fact_ids": ["company", "title", "location", "description"],
             }
         try:
             proposal = propose_action(

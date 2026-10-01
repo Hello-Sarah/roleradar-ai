@@ -15,6 +15,7 @@ from app.evals.graders import (
     grade_score_stability,
     grade_write_counts,
 )
+from app.evals.runner import _grade_item
 
 
 def test_unsupported_cv_claim_fails_even_when_composite_is_high() -> None:
@@ -118,8 +119,8 @@ def _release_item(suite: str, input_payload: dict, expected: dict) -> EvalItem:
             "redaction_marker": "[SYNTHETIC]",
             "input": input_payload,
             "expected": expected,
-            "grader_version": "eval-graders-v1",
-            "model_id": "deterministic-release-v3",
+            "grader_version": "eval-graders-v2",
+            "model_id": "deterministic-release-v4",
             "prompt_version": "none",
         }
     )
@@ -135,6 +136,13 @@ def test_release_jd_adapter_executes_real_text_extraction(monkeypatch) -> None:
             "classification_label": "Applied AI Engineer",
             "score_range": [0, 100],
             "recommendation": "Skip",
+            "extracted_fields": {
+                "company": "Example",
+                "title": "Placeholder",
+                "location": "Unknown",
+                "url": None,
+                "posting_date": None,
+            },
         },
     )
     observed = []
@@ -199,11 +207,17 @@ def test_release_copilot_answer_adapter_executes_grounded_answer_path(monkeypatc
                 "description": "[SYNTHETIC] Build production AI systems.",
             },
         },
-        {"action": "answer", "max_writes": 0},
+        {
+            "action": "answer",
+            "max_writes": 0,
+            "answer_language": "en",
+            "required_facts": ["Synthetic Signal Labs", "Forward Deployed AI Engineer"],
+            "forbidden_facts": ["salary", "credential"],
+        },
     )
     called = []
 
-    def changed_answer(message, context, settings):
+    def changed_answer(message, context, settings, **kwargs):
         called.append((message, context, settings))
         return {"answer": "changed runtime answer", "source_ids": ["job:1"]}
 
@@ -214,3 +228,148 @@ def test_release_copilot_answer_adapter_executes_grounded_answer_path(monkeypatc
     assert output["action"] == "answer"
     assert output["answer"] == "changed runtime answer"
     assert output["source_ids"] == ["job:1"]
+
+
+def test_release_adapter_output_does_not_change_when_only_oracle_expected_changes() -> None:
+    dataset = load_dataset(Path("evals/datasets/v1.jsonl"))
+    original = next(
+        item
+        for item in dataset.items
+        if item.suite == "copilot_normal" and item.expected.get("action") == "answer"
+    )
+    poisoned = original.model_copy(
+        update={
+            "expected": {
+                **original.expected,
+                "required_facts": ["ORACLE MUST NEVER BECOME CANDIDATE OUTPUT"],
+                "forbidden_facts": [],
+            }
+        }
+    )
+    adapter = DeterministicReleaseAdapter()
+
+    assert adapter.evaluate(original) == adapter.evaluate(poisoned)
+
+
+def test_jd_grading_rejects_wrong_production_extraction_fields() -> None:
+    item = _release_item(
+        "jd",
+        {"raw_text": "[SYNTHETIC] Company: Correct Labs\nRole: Applied AI Engineer"},
+        {
+            "classification_label": "Applied AI Engineer",
+            "score_range": [70, 90],
+            "recommendation": "Strong Apply",
+            "extracted_fields": {
+                "company": "Correct Labs",
+                "title": "Applied AI Engineer",
+                "location": "Hong Kong",
+                "url": "https://example.invalid/jobs/correct",
+                "posting_date": "2026-10-02",
+            },
+        },
+    )
+    output = {
+        "extracted_fields": {
+            "company": "Invented Corp",
+            "title": "Wrong title",
+            "location": "Moon",
+            "url": "https://attacker.invalid",
+            "posting_date": "2099-01-01",
+        },
+        "classification_label": "Applied AI Engineer",
+        "scores": [80, 80],
+        "recommendation": "Strong Apply",
+        "available_evidence_ids": ["jd-title"],
+        "evidence_ids": ["jd-title"],
+    }
+
+    graders = {result.name: result for result in _grade_item(item, output)}
+
+    assert graders["critical_field_extraction"].passed is False
+    assert graders["critical_field_extraction"].zero_tolerance_failure is True
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected_failed_grader"),
+    [
+        ("Invented private salary and credential", "grounded_answer"),
+        (
+            "Synthetic Signal Labs — Applied AI Engineer: Build production AI systems.",
+            "answer_language",
+        ),
+    ],
+)
+def test_copilot_answer_grading_rejects_ungrounded_or_wrong_language(
+    answer: str, expected_failed_grader: str
+) -> None:
+    item = EvalItem.model_validate(
+        {
+            "dataset_version": "v1",
+            "id": "runtime-copilot-answer",
+            "suite": "copilot_normal",
+            "locale": "zh-Hans",
+            "synthetic": True,
+            "redaction_marker": "[SYNTHETIC]",
+            "input": {"message": "[SYNTHETIC] 总结证据。"},
+            "expected": {
+                "action": "answer",
+                "max_writes": 0,
+                "answer_language": "zh-Hans",
+                "required_facts": ["Synthetic Signal Labs", "Applied AI Engineer"],
+                "forbidden_facts": ["salary", "credential"],
+            },
+            "grader_version": "eval-graders-v2",
+            "model_id": "deterministic-release-v4",
+            "prompt_version": "none",
+        }
+    )
+    output = {
+        "action": "answer",
+        "write_count": 0,
+        "answer": answer,
+        "available_source_ids": ["job:1"],
+        "source_ids": ["job:1"],
+    }
+
+    graders = {result.name: result for result in _grade_item(item, output)}
+
+    assert graders[expected_failed_grader].passed is False
+
+
+def test_copilot_bilingual_parity_rejects_different_answer_facts_and_sources() -> None:
+    english = {
+        "action": "answer",
+        "write_count": 0,
+        "answer_fact_ids": ["company", "title", "description"],
+        "source_ids": ["job:1"],
+    }
+    chinese = {
+        "action": "answer",
+        "write_count": 0,
+        "answer_fact_ids": ["company", "invented-salary"],
+        "source_ids": ["profile:1"],
+    }
+
+    result = grade_bilingual_parity(english, chinese)
+
+    assert result.passed is False
+    assert result.metrics["mismatches"] == 2
+
+
+def test_cv_eval_requires_production_rejection_of_an_unsupported_claim() -> None:
+    item = _release_item(
+        "cv_pair",
+        {"source_claims": ["[SYNTHETIC] Built reliable AI systems."]},
+        {"unsupported_claims": 0, "docx_required": True},
+    )
+    output = {
+        "source_claim_ids": ["source-0"],
+        "output_claim_ids": ["source-0"],
+        "docx_structure_valid": True,
+        "unsupported_claim_rejected": False,
+    }
+
+    graders = {result.name: result for result in _grade_item(item, output)}
+
+    assert graders["unsupported_claim_rejection"].passed is False
+    assert graders["unsupported_claim_rejection"].zero_tolerance_failure is True
