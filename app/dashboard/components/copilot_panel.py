@@ -12,7 +12,14 @@ import streamlit as st
 
 from app.dashboard.client import APIClientError, RoleRadarClient
 from app.dashboard.components.states import render_state
-from app.dashboard.state import PageAction, UIContext, stable_key, validate_primary_actions
+from app.dashboard.state import (
+    PageAction,
+    UIContext,
+    queue_route_selection,
+    select_job_context,
+    stable_key,
+    validate_primary_actions,
+)
 from app.i18n.service import translate
 from app.schemas import Locale
 
@@ -285,27 +292,89 @@ def _context_path(context: UIContext) -> str:
     return f"/api/v1/copilot/context?{urlencode(query, doseq=True)}"
 
 
+def _first_result_id(result_ids: dict[str, Any], record_type: str) -> int | None:
+    ids = result_ids.get(record_type)
+    return ids[0] if isinstance(ids, list) and ids else None
+
+
+def _result_success_message(locale: Locale, result: dict[str, Any]) -> str:
+    result_ids = result.get("result_record_ids") or {}
+    proposal_type = result.get("proposal_type")
+    job_id = _first_result_id(result_ids, "job")
+    event_id = _first_result_id(result_ids, "application_event")
+    company_id = _first_result_id(result_ids, "watchlist_company")
+    analysis_id = _first_result_id(result_ids, "analysis")
+    generated_cv_id = _first_result_id(result_ids, "generated_cv")
+    action_item_id = _first_result_id(result_ids, "action_item")
+    if proposal_type == "save_job" and job_id is not None:
+        return translate(locale, "copilot.result.save_job", job_id=job_id)
+    if proposal_type == "change_application_status" and job_id is not None:
+        return translate(locale, "copilot.result.change_application_status", job_id=job_id)
+    if proposal_type == "create_application_event" and job_id is not None and event_id is not None:
+        return translate(
+            locale,
+            "copilot.result.create_application_event",
+            event_id=event_id,
+            job_id=job_id,
+        )
+    if proposal_type == "set_follow_up" and job_id is not None:
+        return translate(locale, "copilot.result.set_follow_up", job_id=job_id)
+    if proposal_type in {"add_watchlist_company", "update_watchlist_company"} and company_id:
+        return translate(locale, f"copilot.result.{proposal_type}", company_id=company_id)
+    if proposal_type == "reanalyze_job" and job_id is not None and analysis_id is not None:
+        return translate(
+            locale,
+            "copilot.result.reanalyze_job",
+            analysis_id=analysis_id,
+            job_id=job_id,
+        )
+    if proposal_type == "generate_tailored_cv" and job_id is not None and generated_cv_id:
+        return translate(
+            locale,
+            "copilot.result.generate_tailored_cv",
+            generated_cv_id=generated_cv_id,
+            job_id=job_id,
+        )
+    if proposal_type == "create_action_item" and action_item_id is not None:
+        return translate(locale, "copilot.result.create_action_item", action_item_id=action_item_id)
+    return translate(locale, "component.success")
+
+
 def _render_last_result(locale: Locale, key_prefix: str) -> None:
     result = st.session_state.get("copilot.last_result")
     if not isinstance(result, dict):
         return
-    st.success(translate(locale, "component.success"))
+    st.success(_result_success_message(locale, result))
     result_ids = result.get("result_record_ids") or {}
-    route = "jobs"
-    job_ids = result_ids.get("job") or []
-    if result_ids.get("watchlist_company"):
+    proposal_type = result.get("proposal_type")
+    job_id = _first_result_id(result_ids, "job")
+    company_id = _first_result_id(result_ids, "watchlist_company")
+    generated_cv_id = _first_result_id(result_ids, "generated_cv")
+    action_item_id = _first_result_id(result_ids, "action_item")
+    if company_id is not None:
         route = "watchlist"
-    elif result_ids.get("generated_cv"):
+    elif generated_cv_id is not None:
         route = "cv_library"
+    elif proposal_type == "create_action_item" and action_item_id is not None:
+        route = "dashboard"
+    else:
+        route = "jobs"
     if st.button(
         translate(locale, "copilot.view_result"),
         key=f"{key_prefix}-view-result",
         use_container_width=True,
     ):
-        st.session_state["ui.route"] = route
-        st.session_state["ui-navigation"] = route
-        if job_ids:
-            st.session_state["ui.selected_job_id"] = job_ids[0]
+        queue_route_selection(st.session_state, route)
+        if route == "jobs" and job_id is not None:
+            select_job_context(st.session_state, job_id)
+        elif route == "watchlist" and company_id is not None:
+            st.session_state["ui.selected_company_id"] = company_id
+            st.session_state.pop("ui.selected_job_id", None)
+        else:
+            st.session_state.pop("ui.selected_job_id", None)
+            st.session_state.pop("ui.selected_company_id", None)
+        if action_item_id is not None:
+            st.session_state["ui.selected_action_item_id"] = action_item_id
         st.rerun()
 
 

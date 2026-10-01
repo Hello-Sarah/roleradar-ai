@@ -121,6 +121,15 @@ def apply_route_selection(
         return
     session_state.pop("ui.selected_job_id", None)
     session_state.pop("ui.selected_company_id", None)
+    session_state.pop("ui.selected_action_item_id", None)
+
+
+def queue_route_selection(session_state: MutableMapping[str, object], selected_route: str) -> None:
+    """Queue navigation so the keyed widget is updated before its next render."""
+    apply_route_selection(
+        str(session_state.get("ui.route", "dashboard")), selected_route, session_state
+    )
+    session_state["ui.pending_route"] = selected_route
 
 
 def apply_job_filter(
@@ -133,8 +142,7 @@ def apply_job_filter(
     created_week: str | None = None,
 ) -> None:
     """Navigate a Dashboard metric to the matching saved-job records."""
-    session_state["ui.route"] = "jobs"
-    session_state["ui-navigation"] = "jobs"
+    queue_route_selection(session_state, "jobs")
     if status is None:
         session_state.pop("ui.jobs.status", None)
     else:

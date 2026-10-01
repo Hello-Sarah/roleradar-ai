@@ -28,6 +28,15 @@ _ANALYSIS_SIGNAL_KEYS = {
     "NO_MATCHED_GREEN_FLAGS": "analysis.no_strength_signals",
     "NO_WEAK_DIMENSIONS": "analysis.no_gap_signals",
 }
+_RECOMMENDATION_KEYS = {
+    "Must Apply": "score.must_apply",
+    "Strong Apply": "score.strong_apply",
+    "Selective": "score.selective",
+    "Skip": "score.skip",
+    "Apply Now": "recommendation.apply_now",
+    "Consider": "recommendation.consider",
+    "Build Skills First": "recommendation.build_skills_first",
+}
 
 
 def analysis_signal_label(locale: Locale, value: str, *, gap: bool = False) -> str:
@@ -49,19 +58,12 @@ def analysis_signal_label(locale: Locale, value: str, *, gap: bool = False) -> s
         return value.replace("_", " ").capitalize()
 
 
-def recommendation_label(locale: Locale, score: int | None) -> str:
-    if score is None:
+def recommendation_label(locale: Locale, recommendation: str | None) -> str:
+    """Localize the persisted decision without deriving a new one from its score."""
+    if recommendation is None:
         return translate(locale, "analysis.analysis_pending")
-    key = (
-        "score.must_apply"
-        if score >= 85
-        else "score.strong_apply"
-        if score >= 70
-        else "score.selective"
-        if score >= 55
-        else "score.skip"
-    )
-    return translate(locale, key)
+    key = _RECOMMENDATION_KEYS.get(recommendation)
+    return translate(locale, key) if key else recommendation
 
 
 def render_job_card(
@@ -74,7 +76,7 @@ def render_job_card(
     analysis = job.get("analysis") or {}
     classification = job.get("classification") or {}
     score = analysis.get("fit_score")
-    decision = recommendation_label(locale, score)
+    decision = recommendation_label(locale, analysis.get("recommendation"))
     with st.container(border=True):
         st.markdown(f"<span class='rr-kicker'>{decision}</span>", unsafe_allow_html=True)
         st.subheader(f"{job['company']} — {job['title']}")

@@ -47,6 +47,8 @@ class RecordingClient:
                 },
                 "analysis": {
                     "fit_score": 70,
+                    "scoring_version": "career-fit-v2",
+                    "recommendation": "Strong Apply",
                     "summary": "Stored English summary",
                     "evidence": [],
                     "strengths": [],
@@ -80,6 +82,8 @@ def _render_chinese_job_card(client) -> None:
             },
             "analysis": {
                 "fit_score": 70,
+                "scoring_version": "career-fit-v2",
+                "recommendation": "Strong Apply",
                 "summary": "Stored English summary",
                 "evidence": ["ev-1: Build production AI systems with customers."],
                 "strengths": ["CUSTOMER_DEPLOYMENT", "NO_MATCHED_GREEN_FLAGS"],
@@ -88,6 +92,34 @@ def _render_chinese_job_card(client) -> None:
         },
         region="test-job",
         locale="zh-Hans",
+        client=client,
+    )
+
+
+def _render_inconsistent_recommendation_job_card(client) -> None:
+    from app.dashboard.components.job_card import render_job_card
+
+    render_job_card(
+        {
+            "id": 84,
+            "company": "Auditable AI",
+            "title": "Applied AI Lead",
+            "location": "Hong Kong",
+            "url": None,
+            "status": "Saved",
+            "classification": {"category": "Applied AI Engineer", "confidence": 0.9},
+            "analysis": {
+                "fit_score": 84,
+                "scoring_version": "career-fit-v2",
+                "recommendation": "Selective",
+                "summary": "Stored summary",
+                "evidence": [],
+                "strengths": [],
+                "gaps": [],
+            },
+        },
+        region="persisted-decision",
+        locale="en",
         client=client,
     )
 
@@ -106,6 +138,8 @@ class DashboardClient(RecordingClient):
                 "classification": {"category": "Applied AI Engineer", "confidence": 0.9},
                 "analysis": {
                     "fit_score": 82,
+                    "scoring_version": "career-fit-v2",
+                    "recommendation": "Strong Apply",
                     "summary": "English summary",
                     "evidence": [],
                     "strengths": [],
@@ -116,8 +150,14 @@ class DashboardClient(RecordingClient):
                 "status_counts": {"New": 2, "Applied": 1, "Interview": 1},
                 "high_priority_jobs": [job],
                 "recently_added_jobs": [],
-                "skill_gap_trends": [["AI_DEPTH_EVIDENCE_WEAK", 1]],
-                "weekly_hiring_trends": [{"week": "2026-39", "jobs": 1, "average_fit_score": 82.0}],
+                "skill_gap_trends": [
+                    ["AI_DEPTH_EVIDENCE_WEAK", 2],
+                    ["OWNERSHIP_EVIDENCE_WEAK", 1],
+                ],
+                "weekly_hiring_trends": [
+                    {"week": "2026-38", "jobs": 1, "average_fit_score": 75.0},
+                    {"week": "2026-39", "jobs": 1, "average_fit_score": 82.0},
+                ],
                 "due_follow_ups": [
                     {
                         "job": job,
@@ -153,6 +193,7 @@ class HighPriorityJobsClient(RecordingClient):
                     **common,
                     "analysis": {
                         "fit_score": 70,
+                        "scoring_version": "career-fit-v2",
                         "recommendation": "Strong Apply",
                         "summary": "",
                         "evidence": [],
@@ -167,7 +208,23 @@ class HighPriorityJobsClient(RecordingClient):
                     **common,
                     "analysis": {
                         "fit_score": 84,
+                        "scoring_version": "career-fit-v2",
                         "recommendation": "Selective",
+                        "summary": "",
+                        "evidence": [],
+                        "strengths": [],
+                        "gaps": [],
+                    },
+                },
+                {
+                    "id": 71,
+                    "company": "Legacy AI",
+                    "title": "Legacy Strong Apply",
+                    **common,
+                    "analysis": {
+                        "fit_score": 71,
+                        "scoring_version": "career-fit-v1",
+                        "recommendation": "Strong Apply",
                         "summary": "",
                         "evidence": [],
                         "strengths": [],
@@ -222,6 +279,15 @@ class ShellClient(DashboardClient):
                 "development_gaps": [],
             }
         raise AssertionError(f"Unexpected GET {path}")
+
+
+class DashboardToJobsClient(ShellClient):
+    def get(self, path: str) -> Any:
+        if path == "/api/v1/dashboard":
+            return DashboardClient.get(self, path)
+        if path == "/api/v1/jobs":
+            return HighPriorityJobsClient.get(self, path)
+        return super().get(path)
 
 
 def _render_shell(client) -> None:
@@ -322,6 +388,13 @@ def _render_pending_copilot(client) -> None:
     from app.dashboard.state import UIContext
 
     render_copilot_panel(UIContext(route="jobs", locale="zh-Hans"), client)
+
+
+def _render_copilot_result(client) -> None:
+    from app.dashboard.components.copilot_panel import render_copilot_panel
+    from app.dashboard.state import UIContext
+
+    render_copilot_panel(UIContext(route="dashboard", locale="en"), client)
 
 
 def _pending_proposal() -> dict[str, Any]:
@@ -463,6 +536,17 @@ def test_chinese_job_card_localizes_system_copy_but_keeps_source_evidence() -> N
     assert "NO_WEAK_DIMENSIONS" not in text
 
 
+def test_job_card_displays_persisted_recommendation_instead_of_recomputing_score_band() -> None:
+    app = AppTest.from_function(
+        _render_inconsistent_recommendation_job_card,
+        args=(RecordingClient(),),
+    ).run()
+    text = _rendered_text(app)
+
+    assert "Selective" in text
+    assert "Strong Apply" not in text
+
+
 def test_dashboard_renders_due_follow_ups_and_metric_drill_through() -> None:
     app = AppTest.from_function(_render_dashboard, args=(DashboardClient(),)).run()
     text = _rendered_text(app)
@@ -470,16 +554,26 @@ def test_dashboard_renders_due_follow_ups_and_metric_drill_through() -> None:
     assert "到期跟进" in text
     assert "2026年9月1日" in text
     assert "Send hiring manager note" in text
-    assert len([button for button in app.button if "dashboard-drill-" in str(button.key)]) == 6
+    assert len([button for button in app.button if "dashboard-drill-" in str(button.key)]) == 8
 
     app.button(key="dashboard-drill-applied").click().run()
     assert app.session_state["ui.route"] == "jobs"
     assert app.session_state["ui.jobs.status"] == "Applied"
 
     app = AppTest.from_function(_render_dashboard, args=(DashboardClient(),)).run()
-    app.button(key="dashboard-drill-skill-gap").click().run()
+    app.button(key="dashboard-drill-skill-gap-1").click().run()
     assert app.session_state["ui.route"] == "jobs"
-    assert app.session_state["ui.jobs.gap"] == "AI_DEPTH_EVIDENCE_WEAK"
+    assert app.session_state["ui.jobs.gap"] == "OWNERSHIP_EVIDENCE_WEAK"
+
+    app = AppTest.from_function(_render_dashboard, args=(DashboardClient(),)).run()
+    app.button(key="dashboard-drill-hiring-trend-0").click().run()
+    assert app.session_state["ui.route"] == "jobs"
+    assert app.session_state["ui.jobs.created_week"] == "2026-38"
+
+    app = AppTest.from_function(_render_dashboard, args=(DashboardClient(),)).run()
+    app.button(key="dashboard-follow-up-9").click().run()
+    assert app.session_state["ui.route"] == "jobs"
+    assert app.session_state["ui.selected_job_id"] == 9
 
 
 def test_high_priority_drill_through_uses_persisted_recommendation_band() -> None:
@@ -497,6 +591,21 @@ def test_high_priority_drill_through_uses_persisted_recommendation_band() -> Non
 
     assert "Strong Apply at 70" in text
     assert "Selective at 84" not in text
+    assert "Legacy Strong Apply" not in text
+
+
+def test_full_shell_high_priority_drill_through_renders_exact_dashboard_cohort() -> None:
+    app = AppTest.from_function(_render_shell, args=(DashboardToJobsClient(),))
+    app.session_state["ui.locale"] = "en"
+    app.run()
+
+    app.button(key="dashboard-drill-high").click().run()
+    text = _rendered_text(app)
+
+    assert app.title[0].value == translate("en", "page.jobs.title")
+    assert "Strong Apply at 70" in text
+    assert "Selective at 84" not in text
+    assert "Legacy Strong Apply" not in text
 
 
 def test_copilot_failure_is_localized_and_renders_retry_without_escaping() -> None:
@@ -589,11 +698,83 @@ def test_copilot_confirmation_persists_success_and_links_to_result() -> None:
     app.run()
     app.button(key="copilot-confirm-8").click().run()
 
-    assert "保存成功" in _rendered_text(app)
+    assert "职位 #17 的申请状态已更新。" in _rendered_text(app)
     assert app.button(key="copilot-view-result").label == "查看结果"
     app.button(key="copilot-view-result").click().run()
     assert app.session_state["ui.route"] == "jobs"
     assert app.session_state["ui.selected_job_id"] == 17
+
+
+@pytest.mark.parametrize(
+    ("proposal_type", "result_record_ids", "message", "route"),
+    [
+        ("save_job", {"job": [17]}, "Saved job #17.", "jobs"),
+        (
+            "change_application_status",
+            {"job": [17], "application_event": [22]},
+            "Updated the application status for job #17.",
+            "jobs",
+        ),
+        (
+            "create_application_event",
+            {"job": [17], "application_event": [23]},
+            "Added application event #23 for job #17.",
+            "jobs",
+        ),
+        (
+            "set_follow_up",
+            {"job": [17], "application_event": [24]},
+            "Set the follow-up for job #17.",
+            "jobs",
+        ),
+        (
+            "add_watchlist_company",
+            {"watchlist_company": [4]},
+            "Created Watch List company #4.",
+            "watchlist",
+        ),
+        (
+            "update_watchlist_company",
+            {"watchlist_company": [4]},
+            "Updated Watch List company #4.",
+            "watchlist",
+        ),
+        (
+            "reanalyze_job",
+            {"job": [17], "analysis": [8]},
+            "Created analysis #8 for job #17.",
+            "jobs",
+        ),
+        (
+            "generate_tailored_cv",
+            {"job": [17], "generated_cv": [6]},
+            "Generated tailored CV #6 for job #17.",
+            "cv_library",
+        ),
+        (
+            "create_action_item",
+            {"action_item": [31]},
+            "Created action item #31.",
+            "dashboard",
+        ),
+    ],
+)
+def test_copilot_success_identifies_each_durable_result_and_links_to_its_destination(
+    proposal_type: str,
+    result_record_ids: dict[str, list[int]],
+    message: str,
+    route: str,
+) -> None:
+    app = AppTest.from_function(_render_copilot_result, args=(ProposalClient(),))
+    app.session_state["copilot.last_result"] = {
+        "proposal_type": proposal_type,
+        "result_record_ids": result_record_ids,
+    }
+    app.run()
+
+    assert message in _rendered_text(app)
+    app.button(key="copilot-view-result").click().run()
+    assert app.session_state["ui.route"] == route
 
 
 def test_cv_library_formats_visible_dates_for_chinese() -> None:
@@ -658,6 +839,26 @@ def test_shell_navigation_clears_stale_job_from_rendered_copilot_context() -> No
     app.run()
 
     app.sidebar.radio(key="ui-navigation").set_value("profile").run()
+
+    assert app.session_state["ui.route"] == "profile"
+    assert "ui.selected_job_id" not in app.session_state
+    context_paths = [
+        path for method, path, _ in client.calls if method == "GET" and "/copilot/context?" in path
+    ]
+    assert context_paths[-1].startswith("/api/v1/copilot/context?route=profile")
+    assert "job_id=" not in context_paths[-1]
+
+
+def test_settings_shortcut_clears_stale_job_from_rendered_copilot_context() -> None:
+    client = ShellClient()
+    app = AppTest.from_function(_render_shell, args=(client,))
+    app.session_state["ui.locale"] = "en"
+    app.session_state["ui.route"] = "jobs"
+    app.session_state["ui-navigation"] = "jobs"
+    app.session_state["ui.selected_job_id"] = 17
+    app.run()
+
+    app.button(key="top-settings").click().run()
 
     assert app.session_state["ui.route"] == "profile"
     assert "ui.selected_job_id" not in app.session_state

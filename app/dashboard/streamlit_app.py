@@ -25,6 +25,7 @@ from app.dashboard.state import (
     UIContext,
     apply_locale_selection,
     apply_route_selection,
+    queue_route_selection,
     resolve_ui_locale,
 )
 from app.dashboard.theme import apply_theme
@@ -74,16 +75,21 @@ def _persist_browser_locale(locale: Locale) -> None:
 def _render_shell_navigation(locale: Locale) -> str:
     items = navigation_items(locale)
     routes = [item.route for item in items]
+    pending_route = st.session_state.pop("ui.pending_route", None)
     current = str(st.session_state.get("ui.route", "dashboard"))
     if current not in routes:
         current = "dashboard"
+    if pending_route in routes:
+        st.session_state["ui-navigation"] = pending_route
+    elif st.session_state.get("ui-navigation") not in routes:
+        st.session_state["ui-navigation"] = current
     with st.sidebar:
         st.markdown("## RoleRadar AI")
         st.caption(translate(locale, "app.tagline"))
         route = st.radio(
             translate(locale, "accessibility.open_navigation"),
             routes,
-            index=routes.index(current),
+            index=None,
             format_func=lambda value: next(item.label for item in items if item.route == value),
             label_visibility="collapsed",
             key="ui-navigation",
@@ -120,10 +126,7 @@ def _render_top_utilities(locale: Locale, client: RoleRadarClient) -> Locale:
             key="top-settings",
             use_container_width=True,
         ):
-            apply_route_selection(
-                str(st.session_state.get("ui.route", "dashboard")), "profile", st.session_state
-            )
-            st.session_state["ui-navigation"] = "profile"
+            queue_route_selection(st.session_state, "profile")
             st.rerun()
     return selected_locale
 

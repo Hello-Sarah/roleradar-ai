@@ -11,6 +11,7 @@ from app.dashboard.components.job_card import analysis_signal_label, render_job_
 from app.dashboard.components.states import render_state
 from app.i18n.service import translate
 from app.schemas import Locale
+from app.scoring.rules import SCORING_VERSION
 
 
 def render_page(client: RoleRadarClient, locale: Locale) -> None:
@@ -58,8 +59,11 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
             )
             and (
                 not priority_only
-                or (job.get("analysis") or {}).get("recommendation")
-                in {"Must Apply", "Strong Apply"}
+                or (
+                    (job.get("analysis") or {}).get("scoring_version") == SCORING_VERSION
+                    and (job.get("analysis") or {}).get("recommendation")
+                    in {"Must Apply", "Strong Apply"}
+                )
             )
             and (not gap_filter or gap_filter in ((job.get("analysis") or {}).get("gaps") or []))
             and (

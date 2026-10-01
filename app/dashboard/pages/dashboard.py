@@ -99,13 +99,16 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
             jobs_label = translate(locale, "dashboard.jobs_count")
             frame = pd.DataFrame(localized_gaps, columns=["signal", jobs_label])
             st.bar_chart(frame.set_index("signal").rename_axis(None))
-            if st.button(
-                translate(locale, "dashboard.view_records"),
-                key="dashboard-drill-skill-gap",
-                use_container_width=True,
+            for index, ((gap, _count), (localized_gap, _)) in enumerate(
+                zip(data["skill_gap_trends"], localized_gaps, strict=True)
             ):
-                apply_job_filter(st.session_state, gap=data["skill_gap_trends"][0][0])
-                st.rerun()
+                if st.button(
+                    f"{translate(locale, 'dashboard.view_records')} · {localized_gap}",
+                    key=f"dashboard-drill-skill-gap-{index}",
+                    use_container_width=True,
+                ):
+                    apply_job_filter(st.session_state, gap=gap)
+                    st.rerun()
         else:
             render_state(locale, "empty")
     with charts[1]:
@@ -115,16 +118,14 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
                 columns={"jobs": translate(locale, "dashboard.jobs_count")}
             )
             st.line_chart(frame.set_index("week")[[translate(locale, "dashboard.jobs_count")]])
-            if st.button(
-                translate(locale, "dashboard.view_records"),
-                key="dashboard-drill-hiring-trend",
-                use_container_width=True,
-            ):
-                apply_job_filter(
-                    st.session_state,
-                    created_week=data["weekly_hiring_trends"][-1]["week"],
-                )
-                st.rerun()
+            for index, trend in enumerate(data["weekly_hiring_trends"]):
+                if st.button(
+                    f"{translate(locale, 'dashboard.view_records')} · {trend['week']}",
+                    key=f"dashboard-drill-hiring-trend-{index}",
+                    use_container_width=True,
+                ):
+                    apply_job_filter(st.session_state, created_week=trend["week"])
+                    st.rerun()
         else:
             render_state(locale, "empty")
     st.subheader(translate(locale, "dashboard.recently_added"))
