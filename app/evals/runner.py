@@ -95,6 +95,16 @@ def _grade_item(item: EvalItem, output: dict[str, Any]) -> list[GraderResult]:
             actual=output.get("write_count", -1),
             maximum=item.expected["max_writes"],
         ),
+        *(
+            [
+                grade_evidence_ids(
+                    set(output.get("available_source_ids", [])),
+                    output.get("source_ids", []),
+                )
+            ]
+            if output.get("action") == "answer"
+            else []
+        ),
     ]
 
 
@@ -110,6 +120,10 @@ def _safe_output(output: dict[str, Any]) -> dict[str, Any]:
         "docx_structure_valid",
         "action",
         "write_count",
+        "answer",
+        "available_source_ids",
+        "source_ids",
+        "extracted_fields",
     }
     return {key: output[key] for key in sorted(output.keys() & safe_fields)}
 

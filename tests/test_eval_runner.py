@@ -55,6 +55,30 @@ def test_dataset_rejects_committed_actual_output(tmp_path: Path) -> None:
         load_dataset(supplied_output, enforce_minimums=False)
 
 
+@pytest.mark.parametrize("forbidden_key", ["actual", "output_claims"])
+def test_dataset_rejects_candidate_output_hidden_inside_input(
+    tmp_path: Path, forbidden_key: str
+) -> None:
+    supplied_output = tmp_path / "supplied-output.jsonl"
+    _write(
+        supplied_output,
+        [
+            _item(
+                "cv-supplied",
+                suite="cv_pair",
+                input={
+                    "source_claims": ["[SYNTHETIC] Built reliable AI systems."],
+                    forbidden_key: ["[SYNTHETIC] Claimed candidate output."],
+                },
+                expected={"unsupported_claims": 0, "docx_required": True},
+            )
+        ],
+    )
+
+    with pytest.raises(DatasetValidationError, match="candidate output"):
+        load_dataset(supplied_output, enforce_minimums=False)
+
+
 def test_dataset_requires_labels_ranges_redaction_and_valid_bilingual_pairs(tmp_path: Path) -> None:
     invalid = tmp_path / "invalid.jsonl"
     _write(

@@ -10,7 +10,7 @@ import streamlit as st
 
 from app.dashboard.client import RoleRadarClient
 from app.dashboard.components.job_card import render_job_card
-from app.dashboard.state import select_job_context
+from app.dashboard.state import parse_optional_iso_date, select_job_context
 from app.i18n.service import translate
 from app.schemas import Locale
 
@@ -74,9 +74,11 @@ def _render_preview(client: RoleRadarClient, locale: Locale, extracted: dict[str
             extracted.get("url") or "",
             key="analyze-preview-url",
         )
-        posting_date = st.date_input(
+        posting_date_value = _posting_date(extracted.get("posting_date"))
+        posting_date_text = st.text_input(
             translate(locale, "job.review.posting_date"),
-            value=_posting_date(extracted.get("posting_date")),
+            value=posting_date_value.isoformat() if posting_date_value else "",
+            placeholder="YYYY-MM-DD",
             key="analyze-preview-date",
         )
         description = st.text_area(
@@ -97,13 +99,18 @@ def _render_preview(client: RoleRadarClient, locale: Locale, extracted: dict[str
         cancel_extraction(st.session_state)
         st.rerun()
     if confirm:
+        try:
+            reviewed_posting_date = parse_optional_iso_date(posting_date_text)
+        except ValueError:
+            st.error(translate(locale, "validation.job.invalid_posting_date"))
+            return
         payload = build_confirmed_job_payload(
             extracted,
             company=company,
             title=title,
             location=location,
             url=url,
-            posting_date=posting_date,
+            posting_date=reviewed_posting_date,
             description=description,
         )
         st.session_state["analyze.last_job"] = client.post("/api/v1/jobs", payload)

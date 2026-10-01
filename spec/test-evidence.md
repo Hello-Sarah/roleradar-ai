@@ -29,16 +29,21 @@ artifacts/acceptance/<version>/<git-commit>/
 `manifest.json` records version, full Git commit, dirty-worktree status, UTC start/end, OS, Python,
 browser versions, model ID, prompt/rubric/dataset versions, command exit codes, and SHA-256 hashes of
 every evidence file. Each command record includes the full HEAD, dirty status, commit time, exact
-canonical command, and exhaustive expected artifact paths captured at execution time. A dirty
-worktree, command substitution, stale or copied command provenance, missing hash, or unexpected
-evidence file cannot produce release evidence.
+canonical argv, evidence-source root, and exhaustive expected artifact paths captured at execution
+time. It also binds the resolved interpreter/tool path, executable SHA-256, and version output. The
+validator resolves each canonical tool independently, so a PATH or basename substitution cannot
+produce release evidence. A dirty worktree, command substitution, stale or copied command
+provenance, missing hash, or unexpected evidence file cannot produce release evidence.
 
 ## Acceptance record fields
 
 Each acceptance ID in the versioned `spec/acceptance-v1.json` catalog records requirement,
 preconditions, steps, expected result, automated evidence,
 visual evidence when required, actual result, Pass/Fail/Blocked, tested time, environment, commit,
-and linked defect. Blocked is not Pass and prevents release for Must items.
+and linked defect. Every catalog criterion names its own automated check. The generator derives its
+status from that named test, browser flow, accessibility result, Eval result, or release gate;
+generic or unconditional Pass records are invalid. Blocked is not Pass and prevents release for
+Must items.
 
 ## Required fresh commands
 

@@ -14,8 +14,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +80,7 @@ ACCEPTANCE_FIELDS = {
     "linked_defect",
     "must",
 }
+REVIEWED_STREAMLIT_VERSION = "1.62.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +107,64 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _trusted_executable(name: str) -> Path:
+    tool = {
+        "ruff": "ruff",
+        "format": "ruff",
+        "pytest": "pytest",
+        "e2e": "pytest",
+        "accessibility": "node",
+        "eval": "python",
+    }.get(name, name)
+    if tool == "python":
+        return Path(sys.executable).absolute()
+    if tool in {"ruff", "pytest"}:
+        candidate = Path(sys.executable).absolute().parent / tool
+        if candidate.is_file():
+            return candidate.absolute()
+    resolved = shutil.which(tool)
+    if resolved is None:
+        raise RuntimeError(f"approved executable is unavailable: {tool}")
+    return Path(resolved).resolve()
+
+
+def _resolve_requested_executable(executable: str) -> Path:
+    candidate = Path(executable)
+    if candidate.parent != Path(".") or candidate.is_absolute():
+        return candidate.expanduser().resolve()
+    resolved = shutil.which(executable)
+    if resolved:
+        return Path(resolved).resolve()
+    local_tool = Path(sys.executable).absolute().parent / executable
+    if local_tool.is_file():
+        return local_tool.absolute()
+    raise RuntimeError(f"executable is unavailable: {executable}")
+
+
+@lru_cache(maxsize=32)
+def _executable_identity_cached(executable: str, name: str | None) -> tuple[str, str, str]:
+    path = (
+        _trusted_executable(name)
+        if name in REQUIRED_COMMANDS
+        else _resolve_requested_executable(executable)
+    )
+    completed = subprocess.run(
+        [str(path), "--version"], capture_output=True, text=True, check=False
+    )
+    version = (completed.stdout or completed.stderr).strip().splitlines()
+    return str(path), _sha256(path), version[0] if version else "unknown"
+
+
+def executable_identity(executable: str, *, name: str | None = None) -> dict[str, str]:
+    """Return immutable identity for an executable, using the approved tool for named gates."""
+    path, digest, version = _executable_identity_cached(executable, name)
+    return {
+        "path": path,
+        "sha256": digest,
+        "version": version,
+    }
+
+
 def _screenshot_files(bundle_dir: Path, group: str) -> list[Path]:
     directory = bundle_dir / "screenshots" / group
     return sorted(path for path in directory.glob("*.png") if path.is_file())
@@ -125,7 +187,7 @@ def _evidence_references(value: object) -> list[str]:
     return []
 
 
-def _canonical_command(name: str, command: object) -> bool:
+def _canonical_command(name: str, command: object, evidence_source: object) -> bool:
     if not isinstance(command, str):
         return False
     try:
@@ -134,6 +196,9 @@ def _canonical_command(name: str, command: object) -> bool:
         return False
     if not parts:
         return False
+    if not isinstance(evidence_source, str) or not Path(evidence_source).is_absolute():
+        return False
+    root = str(Path(evidence_source))
     executable = Path(parts[0]).name
     args = parts[1:]
     if name == "ruff":
@@ -144,11 +209,9 @@ def _canonical_command(name: str, command: object) -> bool:
         return (
             executable == "pytest"
             and len(args) == 3
-            and args[0].startswith("--junitxml=")
-            and args[0].endswith("/automated-tests/pytest.xml")
+            and args[0] == f"--junitxml={root}/automated-tests/pytest.xml"
             and args[1] == "--cov"
-            and args[2].startswith("--cov-report=xml:")
-            and args[2].endswith("/automated-tests/coverage.xml")
+            and args[2] == f"--cov-report=xml:{root}/automated-tests/coverage.xml"
         )
     if name == "e2e":
         return (
@@ -164,8 +227,7 @@ def _canonical_command(name: str, command: object) -> bool:
                 "--tracing",
                 "retain-on-failure",
             ]
-            and args[7].startswith("--output=")
-            and args[7].endswith("/browser-results")
+            and args[7] == f"--output={root}/browser-results"
         )
     if name == "accessibility":
         return (
@@ -174,7 +236,7 @@ def _canonical_command(name: str, command: object) -> bool:
             and args[:2] == ["scripts/run_accessibility.mjs", "--base-url"]
             and re.fullmatch(r"http://127\.0\.0\.1:\d+", args[2]) is not None
             and args[3] == "--output"
-            and args[4].endswith("/automated-tests/accessibility.json")
+            and args[4] == f"{root}/automated-tests/accessibility.json"
         )
     if name == "eval":
         return (
@@ -183,7 +245,7 @@ def _canonical_command(name: str, command: object) -> bool:
             and args[:3] == ["-m", "app.evals.runner", "--dataset"]
             and args[3] == "evals/datasets/v1.jsonl"
             and args[4] == "--output"
-            and args[5].endswith("/automated-tests")
+            and args[5] == f"{root}/automated-tests"
         )
     return False
 
@@ -261,8 +323,32 @@ def validate_release_manifest(
             continue
         if command.get("exit_code") != 0:
             errors.append(f"required command failed: {name}")
-        if not _canonical_command(name, command.get("command")):
+        if not _canonical_command(name, command.get("command"), command.get("evidence_source")):
             errors.append(f"non-canonical command: {name}")
+        try:
+            expected_executable = executable_identity("", name=name)
+        except (OSError, RuntimeError):
+            expected_executable = None
+        if command.get("executable") != expected_executable:
+            errors.append(f"untrusted executable: {name}")
+        try:
+            command_parts = shlex.split(str(command.get("command", "")))
+        except ValueError:
+            command_parts = []
+        try:
+            requested_path = (
+                _resolve_requested_executable(command_parts[0]) if command_parts else None
+            )
+        except RuntimeError:
+            requested_path = None
+        if (
+            expected_executable is None
+            or requested_path is None
+            or str(requested_path) != expected_executable["path"]
+        ):
+            errors.append(f"untrusted executable: {name}")
+        if command.get("argv") != command_parts[1:]:
+            errors.append(f"command argv does not match: {name}")
         if command.get("git_commit") != expected_commit:
             errors.append(f"command commit does not match: {name}")
         if command.get("dirty_worktree") is not False:
@@ -328,6 +414,25 @@ def validate_release_manifest(
                 errors.append("Eval prompt version does not match manifest")
             if eval_summary.get("grader_version") != manifest.get("rubric_version"):
                 errors.append("Eval grader version does not match manifest")
+
+    accessibility_path = bundle_dir / "automated-tests" / "accessibility.json"
+    if accessibility_path.is_file():
+        try:
+            accessibility = _load_json(accessibility_path)
+        except (json.JSONDecodeError, OSError):
+            errors.append("invalid accessibility report")
+        else:
+            if accessibility.get("streamlit_version") != REVIEWED_STREAMLIT_VERSION:
+                errors.append(
+                    f"Streamlit runtime is not the reviewed version: {REVIEWED_STREAMLIT_VERSION}"
+                )
+            if accessibility.get("passed") is not True:
+                errors.append("accessibility report did not pass")
+    runtime = manifest.get("runtime")
+    if not isinstance(runtime, dict) or runtime.get("streamlit") != REVIEWED_STREAMLIT_VERSION:
+        errors.append(
+            f"Streamlit runtime is not the reviewed version: {REVIEWED_STREAMLIT_VERSION}"
+        )
 
     acceptance = manifest.get("acceptance")
     catalog = _catalog()
@@ -431,6 +536,188 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _eval_check_result(
+    check_name: str, *, summary: dict[str, Any], rows: list[dict[str, Any]]
+) -> tuple[str, str]:
+    """Derive one acceptance result from its named Eval population and graders."""
+    if check_name == "dataset-contract":
+        expected_counts = {
+            "jd": 60,
+            "cv_pair": 20,
+            "copilot_normal": 30,
+            "copilot_adversarial": 20,
+        }
+        observed = summary.get("suite_counts")
+        passed = summary.get("item_count") == 130 and observed == expected_counts
+        return (
+            "Pass" if passed else "Fail",
+            f"item_count={summary.get('item_count')}, suites={observed}",
+        )
+    if check_name == "release-thresholds":
+        passed = summary.get("passed") is True and summary.get("zero_tolerance_failures") == 0
+        return (
+            "Pass" if passed else "Fail",
+            f"failed_items={summary.get('failed_items')}, "
+            f"zero_tolerance_failures={summary.get('zero_tolerance_failures')}",
+        )
+
+    selectors: dict[str, tuple[str, set[str], Any]] = {
+        "jd-evidence-ids": ("jd", {"evidence_ids"}, lambda _row: True),
+        "jd-pmo-detection": (
+            "jd",
+            {"expected_label"},
+            lambda row: row.get("expected", {}).get("classification_label") == "Project Management",
+        ),
+        "cv-factual-support": (
+            "cv_pair",
+            {"cv_factual_support", "docx_structure"},
+            lambda _row: True,
+        ),
+        "copilot-grounded-answer": (
+            "copilot_normal",
+            {"schema", "expected_label", "evidence_ids"},
+            lambda row: row.get("output", {}).get("action") == "answer",
+        ),
+        "copilot-action-schema": (
+            "copilot_normal",
+            {"schema", "expected_label", "write_counts"},
+            lambda row: row.get("output", {}).get("action") != "answer",
+        ),
+        "copilot-security": (
+            "copilot_adversarial",
+            {"schema", "expected_label", "write_counts"},
+            lambda _row: True,
+        ),
+    }
+    selection = selectors.get(check_name)
+    if selection is None:
+        return "Blocked", f"unknown named Eval check: {check_name}"
+    suite, grader_names, predicate = selection
+    selected = [row for row in rows if row.get("suite") == suite and predicate(row)]
+    if not selected:
+        return "Blocked", f"no Eval items selected for {check_name}"
+    missing = 0
+    failures = 0
+    for row in selected:
+        graders = {
+            result.get("name"): result
+            for result in row.get("grader_results", [])
+            if isinstance(result, dict)
+        }
+        missing += len(grader_names - graders.keys())
+        failures += sum(
+            graders[name].get("passed") is not True for name in grader_names & graders.keys()
+        )
+    if missing:
+        return "Blocked", f"items={len(selected)}, missing_named_graders={missing}"
+    return "Pass" if failures == 0 else "Fail", f"items={len(selected)}, grader_failures={failures}"
+
+
+def _criterion_result(
+    acceptance_id: str,
+    *,
+    criterion: dict[str, Any],
+    source: Path,
+    command_by_name: dict[str, dict[str, Any]],
+) -> tuple[str, str, list[str]]:
+    """Evaluate one criterion from its own machine-readable gate evidence."""
+    check = criterion.get("automated_check")
+    if not isinstance(check, dict) or not isinstance(check.get("name"), str):
+        return "Blocked", f"{acceptance_id} has no named automated check", []
+    kind = check.get("kind")
+    check_name = check["name"]
+    if kind == "accessibility":
+        path = source / "automated-tests" / "accessibility.json"
+        if not path.is_file():
+            return "Blocked", "UI-003 accessibility report is missing", []
+        report = _load_json(path)
+        failures = {
+            "AA": report.get("aa_failure_count", -1),
+            "unresolved": report.get("unresolved_incomplete_count", -1),
+            "keyboard": report.get("keyboard_failure_count", -1),
+            "dynamic keyboard": report.get("dynamic_keyboard_failure_count", -1),
+        }
+        passed = report.get("passed") is True and all(value == 0 for value in failures.values())
+        detail = ", ".join(f"{name}={value}" for name, value in failures.items())
+        return (
+            "Pass" if passed else "Fail",
+            f"{acceptance_id} check {check_name}: {detail}",
+            [str(path.relative_to(source))],
+        )
+    if kind == "eval":
+        path = source / "automated-tests" / "eval-summary.json"
+        items_path = source / "automated-tests" / "eval-items.jsonl"
+        if not path.is_file() or not items_path.is_file():
+            return "Blocked", f"{acceptance_id} Eval summary is missing", []
+        try:
+            summary = _load_json(path)
+            rows = [json.loads(line) for line in items_path.read_text().splitlines() if line]
+        except (OSError, json.JSONDecodeError, AttributeError):
+            return "Blocked", f"{acceptance_id} Eval evidence is invalid", []
+        status, detail = _eval_check_result(check_name, summary=summary, rows=rows)
+        return (
+            status,
+            f"{acceptance_id} check {check_name}: {detail}",
+            ["automated-tests/eval-summary.json", "automated-tests/eval-items.jsonl"],
+        )
+    if kind == "release":
+        missing = sorted(set(REQUIRED_COMMANDS) - set(command_by_name))
+        failed = sorted(
+            name for name, result in command_by_name.items() if result.get("exit_code") != 0
+        )
+        status = "Blocked" if missing else ("Fail" if failed else "Pass")
+        return (
+            status,
+            f"{acceptance_id} check {check_name}: missing={missing}, failed={failed}",
+            ["command-results.json", "automated-tests/eval-summary.json"],
+        )
+    if kind == "e2e":
+        evidence = ["automated-tests/e2e-results.json"]
+        e2e = command_by_name.get("e2e")
+        if e2e is None:
+            return "Blocked", f"{acceptance_id} browser command result is missing", evidence
+        if e2e.get("exit_code") != 0:
+            return "Fail", f"{acceptance_id} browser suite exit={e2e.get('exit_code')}", evidence
+        report_path = source / evidence[0]
+        try:
+            stdout = str(_load_json(report_path).get("stdout", ""))
+        except (OSError, json.JSONDecodeError, AttributeError):
+            return "Blocked", f"{acceptance_id} browser result is invalid", evidence
+        if check_name not in stdout:
+            return (
+                "Blocked",
+                f"{acceptance_id} named browser check was not executed: {check_name}",
+                evidence,
+            )
+        return "Pass", f"{acceptance_id} named browser check passed: {check_name}", evidence
+    if kind != "pytest":
+        return "Blocked", f"{acceptance_id} has unknown check kind: {kind}", []
+    evidence = ["automated-tests/pytest.xml"]
+    pytest_path = source / "automated-tests" / "pytest.xml"
+    if not pytest_path.is_file():
+        return "Blocked", f"{acceptance_id} pytest JUnit report is missing", evidence
+    try:
+        root = ET.parse(pytest_path).getroot()
+        cases = {
+            f"{case.get('classname')}::{case.get('name')}": case for case in root.iter("testcase")
+        }
+    except (ET.ParseError, ValueError):
+        return "Blocked", f"{acceptance_id} pytest JUnit report is invalid", evidence
+    matches = [case for node_id, case in cases.items() if node_id.startswith(check_name)]
+    if not matches:
+        return (
+            "Blocked",
+            f"{acceptance_id} named pytest check was not executed: {check_name}",
+            evidence,
+        )
+    failed = sum(any(child.tag in {"failure", "error"} for child in list(case)) for case in matches)
+    return (
+        "Pass" if failed == 0 else "Fail",
+        f"{acceptance_id} named pytest check {check_name}: cases={len(matches)}, failed={failed}",
+        evidence,
+    )
+
+
 def write_acceptance_results(*, source: Path, commit: str, environment: str) -> Path:
     """Create the complete catalog-backed acceptance ledger for already-produced evidence."""
     if not FULL_SHA_PATTERN.fullmatch(commit):
@@ -460,46 +747,40 @@ def write_acceptance_results(*, source: Path, commit: str, environment: str) -> 
         ],
         "DASH-001": ["screenshots/en/webkit-dashboard.png"],
     }
-    browser_prefixes = {"I18N", "UI", "JOB", "APP", "WATCH", "CV", "CHAT", "DASH"}
+    command_results = _load_json(source / "command-results.json")
+    command_by_name = {
+        str(result.get("name")): result for result in command_results if isinstance(result, dict)
+    }
     tested_at = _utc_now()
     records: list[dict[str, Any]] = []
     for acceptance_id, criterion in catalog.items():
-        prefix = acceptance_id.split("-", 1)[0]
-        if prefix == "EVAL":
-            automated = [
-                "automated-tests/eval-summary.json",
-                "automated-tests/eval-items.jsonl",
-            ]
-        elif acceptance_id == "UI-003":
-            automated = [
-                "automated-tests/accessibility.json",
-                "automated-tests/e2e-results.json",
-            ]
-        elif acceptance_id == "REL-001":
-            automated = ["command-results.json", "automated-tests/eval-summary.json"]
-        elif prefix in browser_prefixes:
-            automated = ["automated-tests/pytest.xml", "automated-tests/e2e-results.json"]
-        else:
-            automated = ["automated-tests/pytest.xml"]
+        status, actual_result, automated = _criterion_result(
+            acceptance_id,
+            criterion=criterion,
+            source=source,
+            command_by_name=command_by_name,
+        )
         visual = visual_by_id.get(acceptance_id, [])
         if criterion.get("visual_required") and not visual:
             raise RuntimeError(f"catalog visual mapping missing: {acceptance_id}")
         for relative_name in [*automated, *visual]:
-            if not (source / relative_name).is_file():
-                raise RuntimeError(f"acceptance evidence missing: {acceptance_id}: {relative_name}")
+            if not (source / relative_name).is_file() and status == "Pass":
+                status = "Blocked"
+                actual_result = f"{acceptance_id} evidence missing: {relative_name}"
         records.append(
             {
                 "id": acceptance_id,
                 "requirement": f"V1 acceptance criterion {acceptance_id}",
                 "preconditions": "Clean candidate commit; isolated synthetic/redacted fixtures",
-                "steps": "Run the catalog-linked automated and visual evidence for this commit",
+                "steps": (
+                    "Run named check "
+                    f"{criterion['automated_check']['name']} from the catalog for this commit"
+                ),
                 "expected_result": "The criterion passes with fresh, hashed evidence",
                 "automated_evidence": automated,
                 "visual_evidence": visual,
-                "actual_result": (
-                    "Pass; linked evidence completed without a release-blocking defect"
-                ),
-                "status": "Pass",
+                "actual_result": actual_result,
+                "status": status,
                 "tested_at": tested_at,
                 "environment": environment,
                 "commit": commit,
@@ -528,6 +809,7 @@ def record_command(
     commit = _git_output(cwd, "rev-parse", "HEAD")
     dirty = bool(_git_output(cwd, "status", "--porcelain"))
     commit_time = _git_output(cwd, "show", "-s", "--format=%cI", "HEAD")
+    resolved_executable = _resolve_requested_executable(command[0])
     started_at = _utc_now()
     completed = subprocess.run(command, cwd=cwd, capture_output=True, text=True, check=False)
     ended_at = _utc_now()
@@ -542,6 +824,9 @@ def record_command(
         "dirty_worktree": dirty,
         "commit_time": commit_time,
         "artifacts": list(COMMAND_OUTPUTS.get(name, (str(output_relative),))),
+        "executable": executable_identity(str(resolved_executable)),
+        "argv": command[1:],
+        "evidence_source": str(source.resolve()),
     }
     if output_path.suffix == ".json":
         output_path.write_text(
@@ -657,6 +942,7 @@ def build_bundle(args: argparse.Namespace) -> tuple[Path, ManifestValidation]:
                 "os": platform.platform(),
                 "python": platform.python_version(),
                 "node": args.node_version,
+                "streamlit": package_version("streamlit"),
             },
             "browsers": _version_map(args.browser_versions),
             "model_id": args.model_id,

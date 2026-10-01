@@ -10,6 +10,18 @@ from typing import cast
 from app.i18n.service import resolve_locale
 from app.schemas import Locale
 
+
+def parse_optional_iso_date(value: str) -> date | None:
+    """Parse an optional accessible date text field using the documented ISO format."""
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        return date.fromisoformat(normalized)
+    except ValueError as error:
+        raise ValueError("Date must use YYYY-MM-DD format") from error
+
+
 _EN_MONTHS = (
     "Jan",
     "Feb",

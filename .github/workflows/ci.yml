@@ -15,6 +15,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e '.[dev]'
+      - run: python -c "import streamlit; assert streamlit.__version__ == '1.62.0'"
       - run: python -m playwright install --with-deps chromium webkit
       - run: npm install --prefix "$RUNNER_TEMP/roleradar-node" axe-core@4.10.3
       - name: Record Ruff
@@ -79,7 +80,7 @@ jobs:
             --source "$EVIDENCE_DIR" --commit "$COMMIT" --environment "GitHub Actions ubuntu-latest"
           python scripts/build_acceptance_bundle.py \
             --source "$EVIDENCE_DIR" --output-root "${{ runner.temp }}/artifacts/acceptance" \
-            --version v1 --model-id deterministic-release-v2 --prompt-version none \
+            --version v1 --model-id deterministic-release-v3 --prompt-version none \
             --rubric-version eval-graders-v1 --dataset-version v1 \
             --browser-versions chromium=playwright-managed,webkit=playwright-managed \
             --node-version "$(node --version)"

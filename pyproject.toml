@@ -20,7 +20,7 @@ dependencies = [
   "pydantic-settings>=2.5,<3",
   "python-multipart>=0.0.12,<1",
   "sqlalchemy>=2.0,<3",
-  "streamlit>=1.39,<2",
+  "streamlit==1.62.0",
   "uvicorn[standard]>=0.30,<1",
 ]
 
@@ -37,7 +37,7 @@ dev = [
 packages = ["app"]
 
 [tool.pytest.ini_options]
-addopts = "-q --disable-warnings --cov --cov-report=term-missing"
+addopts = "-vv --disable-warnings --cov --cov-report=term-missing"
 testpaths = ["tests"]
 norecursedirs = ["tests/e2e"]
 

@@ -9,7 +9,8 @@ def calm_intelligence_css() -> str:
     return """
     :root {
       --rr-canvas: #F5F5F7; --rr-surface: #FFFFFF; --rr-text: #1D1D1F;
-      --rr-secondary: #6E6E73; --rr-blue: #0071E3; --rr-success: #248A3D;
+      --rr-secondary: #6E6E73; --rr-secondary-accessible: #55555A;
+      --rr-blue: #0071E3; --rr-blue-accessible: #0065CC; --rr-success: #248A3D;
       --rr-warning: #B35C00; --rr-danger: #D70015; --rr-hairline: #D2D2D7;
       --rr-radius: 18px;
     }
@@ -39,7 +40,7 @@ def calm_intelligence_css() -> str:
     }
     .stApp h2, .stApp h3 { color: var(--rr-text) !important; letter-spacing: -.015em; }
     .stApp p, .stApp label, [data-testid="stCaptionContainer"] {
-      color: var(--rr-secondary) !important;
+      color: var(--rr-secondary-accessible) !important;
     }
     [data-testid="stCaptionContainer"],
     [data-testid="stCaptionContainer"] p {
@@ -64,7 +65,10 @@ def calm_intelligence_css() -> str:
     [role="button"]:focus-visible, [role="radio"]:focus-visible {
       outline: 3px solid rgba(0, 113, 227, .45) !important; outline-offset: 3px;
     }
-    .rr-kicker { color: var(--rr-blue); font-size: 13px; font-weight: 650; letter-spacing: .04em; }
+    .rr-kicker {
+      color: var(--rr-blue-accessible); font-size: 13px; font-weight: 650;
+      letter-spacing: .04em;
+    }
     .rr-copilot { min-width: 0; }
     .st-key-mobile_copilot_launcher { display: none; }
     @media (max-width: 390px) {

@@ -188,3 +188,40 @@ def test_intent_provider_runs_after_context_read_transaction_closes(
 
     assert response.status_code == 201
     assert response.json()["proposal_type"] == "save_job"
+
+
+def test_grounded_answer_uses_selected_context_and_persists_citations(
+    client: TestClient, db
+) -> None:
+    from app.database.models import Job
+
+    job = Job(
+        fingerprint="copilot-grounded-answer-job",
+        company="Synthetic Signal Labs",
+        title="Applied AI Engineer",
+        location="Hong Kong",
+        description="[SYNTHETIC] Build reliable AI systems using Python and SQL.",
+        source="manual",
+        status="New",
+    )
+    db.add(job)
+    db.commit()
+    session = client.post(
+        "/api/v1/copilot/sessions", json={"title": "Grounded answer", "locale": "en"}
+    ).json()
+
+    response = client.post(
+        "/api/v1/copilot/answer",
+        json={
+            "session_id": session["id"],
+            "message": "Summarize the selected job.",
+            "job_id": job.id,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["source_ids"] == [f"job:{job.id}"]
+    assert job.description in response.json()["answer"]
+    messages = client.get(f"/api/v1/copilot/sessions/{session['id']}/messages").json()
+    assert messages[-1]["role"] == "assistant"
+    assert messages[-1]["sources"] == [{"record_type": "job", "record_id": job.id, "version": None}]

@@ -46,7 +46,9 @@ pass/fail. Composite scores never hide a zero-tolerance safety failure.
 The committed dataset stores inputs and expected labels/ranges only. The release runner invokes the
 candidate commit's deterministic product implementation through suite adapters; observed output is
 written only to the generated Eval evidence. A committed, dataset-supplied `actual` value is never
-accepted as execution evidence.
+accepted as execution evidence. Extraction, CV generation, and grounded Copilot adapters exercise
+their production entry points with isolated synthetic fixtures; external model/provider calls are
+replaced by deterministic test providers, never by committed output claims.
 
 Every generated Eval item stores dataset version, item ID, input hash, expected label/range,
 observed output, grader version, per-grader result, aggregate result, model identifier, prompt

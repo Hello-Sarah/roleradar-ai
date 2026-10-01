@@ -2,11 +2,18 @@ import copy
 import hashlib
 import json
 import subprocess
+import tomllib
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pytest
 
-from scripts.build_acceptance_bundle import record_command, validate_release_manifest
+from scripts.build_acceptance_bundle import (
+    executable_identity,
+    record_command,
+    validate_release_manifest,
+    write_acceptance_results,
+)
 
 FULL_COMMIT = "1" * 40
 STARTED_AT = "2026-10-01T10:00:00Z"
@@ -68,12 +75,97 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
                 "model_id": "mocked-provider",
                 "prompt_version": "career-fit-prompt-v2",
                 "grader_version": "career-fit-v2",
+                "item_count": 130,
+                "suite_counts": {
+                    "jd": 60,
+                    "cv_pair": 20,
+                    "copilot_normal": 30,
+                    "copilot_adversarial": 20,
+                },
+                "suite_failures": {
+                    "jd": 0,
+                    "cv_pair": 0,
+                    "copilot_normal": 0,
+                    "copilot_adversarial": 0,
+                },
             }
         ),
         encoding="utf-8",
     )
-    (automated / "eval-items.jsonl").write_text("{}\n", encoding="utf-8")
-    (automated / "pytest.xml").write_text("<testsuite failures='0'/>", encoding="utf-8")
+    eval_rows = [
+        {
+            "item_id": "jd-ai",
+            "suite": "jd",
+            "expected": {"classification_label": "Applied AI Engineer"},
+            "output": {"action": None},
+            "passed": True,
+            "grader_results": [
+                {"name": name, "passed": True}
+                for name in ("schema", "score_stability", "evidence_ids", "expected_label")
+            ],
+        },
+        {
+            "item_id": "jd-pmo",
+            "suite": "jd",
+            "expected": {"classification_label": "Project Management"},
+            "output": {"action": None},
+            "passed": True,
+            "grader_results": [
+                {"name": "expected_label", "passed": True},
+                {"name": "evidence_ids", "passed": True},
+            ],
+        },
+        {
+            "item_id": "cv",
+            "suite": "cv_pair",
+            "expected": {},
+            "output": {"action": None},
+            "passed": True,
+            "grader_results": [
+                {"name": "cv_factual_support", "passed": True},
+                {"name": "docx_structure", "passed": True},
+            ],
+        },
+        {
+            "item_id": "copilot-answer",
+            "suite": "copilot_normal",
+            "expected": {"action": "answer"},
+            "output": {"action": "answer"},
+            "passed": True,
+            "grader_results": [
+                {"name": "schema", "passed": True},
+                {"name": "expected_label", "passed": True},
+                {"name": "evidence_ids", "passed": True},
+            ],
+        },
+        {
+            "item_id": "copilot-action",
+            "suite": "copilot_normal",
+            "expected": {"action": "save_job"},
+            "output": {"action": "save_job"},
+            "passed": True,
+            "grader_results": [
+                {"name": "schema", "passed": True},
+                {"name": "expected_label", "passed": True},
+                {"name": "write_counts", "passed": True},
+            ],
+        },
+        {
+            "item_id": "copilot-security",
+            "suite": "copilot_adversarial",
+            "expected": {"action": "refuse"},
+            "output": {"action": "refuse"},
+            "passed": True,
+            "grader_results": [
+                {"name": "schema", "passed": True},
+                {"name": "expected_label", "passed": True},
+                {"name": "write_counts", "passed": True},
+            ],
+        },
+    ]
+    (automated / "eval-items.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in eval_rows), encoding="utf-8"
+    )
     (automated / "coverage.xml").write_text("<coverage />", encoding="utf-8")
     commands_data = (
         ("ruff", "ruff check .", ("automated-tests/ruff.txt",)),
@@ -117,6 +209,8 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             path = bundle / relative_name
             if not path.exists():
                 path.write_text(f"{name} evidence", encoding="utf-8")
+        command_parts = command.split()
+        identity = executable_identity(command_parts[0], name=name)
         commands.append(
             {
                 "name": name,
@@ -129,10 +223,39 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
                 "dirty_worktree": False,
                 "commit_time": "2026-10-01T09:00:00Z",
                 "artifacts": list(artifacts),
+                "executable": identity,
+                "argv": command_parts[1:],
+                "evidence_source": "/tmp/bundle",
             }
         )
+    (automated / "accessibility.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "streamlit_version": "1.62.0",
+                "aa_failure_count": 0,
+                "unresolved_incomplete_count": 0,
+                "keyboard_failure_count": 0,
+                "dynamic_keyboard_failure_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
     (bundle / "command-results.json").write_text(json.dumps(commands), encoding="utf-8")
     catalog = json.loads(Path("spec/acceptance-v1.json").read_text())["criteria"]
+    suite = ET.Element("testsuite", failures="0", errors="0")
+    e2e_checks: list[str] = []
+    for criterion in catalog:
+        check = criterion["automated_check"]
+        if check["kind"] == "pytest":
+            classname, name = check["name"].split("::", 1)
+            ET.SubElement(suite, "testcase", classname=classname, name=name)
+        if check["kind"] == "e2e":
+            e2e_checks.append(check["name"])
+    ET.ElementTree(suite).write(automated / "pytest.xml", encoding="unicode")
+    (automated / "e2e-results.json").write_text(
+        json.dumps({"stdout": "\n".join(e2e_checks)}), encoding="utf-8"
+    )
     acceptance = [
         {
             "id": criterion["id"],
@@ -167,7 +290,7 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         "dirty_worktree": False,
         "started_at": STARTED_AT,
         "ended_at": ENDED_AT,
-        "runtime": {"os": "test-os", "python": "3.12.0"},
+        "runtime": {"os": "test-os", "python": "3.12.0", "streamlit": "1.62.0"},
         "browsers": {"chromium": "test", "webkit": "test"},
         "model_id": "mocked-provider",
         "prompt_version": "career-fit-prompt-v2",
@@ -260,6 +383,11 @@ def test_command_recorder_persists_actual_exit_code_times_and_output(tmp_path: P
     assert result["command"] == "/bin/sh -c 'printf recorded-output; exit 3'"
     assert result["started_at"].endswith("Z")
     assert result["ended_at"].endswith("Z")
+    assert Path(result["executable"]["path"]).is_absolute()
+    assert result["executable"]["sha256"]
+    assert result["executable"]["version"]
+    assert result["argv"] == ["-c", "printf recorded-output; exit 3"]
+    assert result["evidence_source"] == str(tmp_path.resolve())
     assert (tmp_path / "automated-tests" / "focused.txt").read_text() == "recorded-output"
     persisted = json.loads((tmp_path / "command-results.json").read_text())
     assert persisted == [result]
@@ -352,6 +480,22 @@ def test_release_gate_rejects_dataset_version_substitution(tmp_path: Path) -> No
     assert "Eval dataset version does not match manifest" in result.errors
 
 
+def test_release_gate_blocks_unreviewed_streamlit_runtime(tmp_path: Path) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    manifest["runtime"]["streamlit"] = "1.63.0"
+
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+
+    assert result.release_ready is False
+    assert "Streamlit runtime is not the reviewed version: 1.62.0" in result.errors
+
+
+def test_project_reproduces_reviewed_streamlit_runtime_exactly() -> None:
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    assert "streamlit==1.62.0" in project["project"]["dependencies"]
+
+
 def test_release_gate_rejects_copied_command_timestamps(tmp_path: Path) -> None:
     bundle, manifest = _valid_bundle(tmp_path)
     manifest["commands"][1]["started_at"] = manifest["commands"][0]["started_at"]
@@ -380,6 +524,75 @@ def test_release_gate_rejects_noncanonical_extra_test_filter(tmp_path: Path) -> 
 
     assert result.release_ready is False
     assert "non-canonical command: pytest" in result.errors
+
+
+@pytest.mark.parametrize(
+    ("command_name", "attacker_path"),
+    [
+        ("ruff", "/tmp/attacker/ruff"),
+        ("pytest", "/tmp/attacker/pytest"),
+        ("e2e", "/tmp/attacker/pytest"),
+        ("accessibility", "/tmp/attacker/node"),
+        ("eval", "/tmp/attacker/python"),
+    ],
+)
+def test_release_gate_rejects_trusted_basename_from_untrusted_path(
+    tmp_path: Path, command_name: str, attacker_path: str
+) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    command = next(item for item in manifest["commands"] if item["name"] == command_name)
+    parts = command["command"].split()
+    parts[0] = attacker_path
+    command["command"] = " ".join(parts)
+
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+
+    assert result.release_ready is False
+    assert f"untrusted executable: {command_name}" in result.errors
+
+
+def test_acceptance_results_derive_status_from_criterion_specific_evidence(
+    tmp_path: Path,
+) -> None:
+    source, _manifest = _valid_bundle(tmp_path)
+    accessibility = source / "automated-tests" / "accessibility.json"
+    payload = json.loads(accessibility.read_text(encoding="utf-8"))
+    payload.update(passed=False, dynamic_keyboard_failure_count=1)
+    accessibility.write_text(json.dumps(payload), encoding="utf-8")
+
+    output = write_acceptance_results(
+        source=source,
+        commit=FULL_COMMIT,
+        environment="isolated-test",
+    )
+    records = {record["id"]: record for record in json.loads(output.read_text())}
+
+    assert records["UI-003"]["status"] == "Fail"
+    assert "dynamic keyboard" in records["UI-003"]["actual_result"].lower()
+    assert records["JOB-002"]["status"] == "Pass"
+    assert records["UI-003"]["actual_result"] != records["JOB-002"]["actual_result"]
+
+
+def test_acceptance_results_fail_only_the_named_eval_criterion(tmp_path: Path) -> None:
+    source, _manifest = _valid_bundle(tmp_path)
+    items_path = source / "automated-tests" / "eval-items.jsonl"
+    rows = [json.loads(line) for line in items_path.read_text().splitlines()]
+    cv_row = next(row for row in rows if row["suite"] == "cv_pair")
+    cv_row["passed"] = False
+    cv_row["grader_results"][0]["passed"] = False
+    items_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    output = write_acceptance_results(
+        source=source,
+        commit=FULL_COMMIT,
+        environment="isolated-test",
+    )
+    records = {record["id"]: record for record in json.loads(output.read_text())}
+
+    assert records["CV-003"]["status"] == "Fail"
+    assert "cv" in records["CV-003"]["actual_result"].lower()
+    assert records["SCORE-003"]["status"] == "Pass"
+    assert records["CHAT-003"]["status"] == "Pass"
 
 
 def test_release_gate_rejects_command_outside_manifest_time_range(tmp_path: Path) -> None:

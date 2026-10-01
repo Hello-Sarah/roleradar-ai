@@ -84,17 +84,27 @@ function exactSidebarFinding(violation) {
   );
 }
 
-function buildReport({ routes, streamlit_version: installedVersion, base_url = null, engine = {} }) {
+function buildReport({
+  routes,
+  dynamic_states: dynamicStates = [],
+  streamlit_version: installedVersion,
+  base_url = null,
+  engine = {},
+}) {
   const versionReviewed = installedVersion === REVIEWED_STREAMLIT_VERSION;
-  const findings = routes.flatMap((route) =>
+  const auditedSurfaces = [
+    ...routes,
+    ...dynamicStates.map((state) => ({ ...state, route: `dynamic:${state.state}` })),
+  ];
+  const findings = auditedSurfaces.flatMap((route) =>
     (route.violations ?? []).map((violation) => ({ route: route.route, ...violation })),
   );
   const suppressed = versionReviewed ? findings.filter(exactSidebarFinding) : [];
   const aaFailures = findings.filter((violation) => !suppressed.includes(violation));
-  const incomplete = routes.flatMap((route) =>
+  const incomplete = auditedSurfaces.flatMap((route) =>
     (route.incomplete ?? []).map((finding) => ({ route: route.route, ...finding })),
   );
-  const incompleteReviews = routes.flatMap((route) =>
+  const incompleteReviews = auditedSurfaces.flatMap((route) =>
     (route.incomplete_reviews ?? []).map((review) => ({ route: route.route, ...review })),
   );
   const unresolvedIncomplete = incomplete.flatMap((finding) =>
@@ -116,9 +126,32 @@ function buildReport({ routes, streamlit_version: installedVersion, base_url = n
       (route) =>
         route.keyboard?.all_controls_reached !== true ||
         route.keyboard?.all_controls_named !== true ||
-        route.keyboard?.all_focus_visible !== true,
+        route.keyboard?.all_focus_visible !== true ||
+        (route.activation && route.activation.passed !== true),
     )
     .map((route) => ({ route: route.route, ...route.keyboard }));
+  const dynamicKeyboardFailures = dynamicStates
+    .filter(
+      (state) =>
+        state.keyboard?.all_controls_reached !== true ||
+        state.keyboard?.all_controls_named !== true ||
+        state.keyboard?.all_focus_visible !== true ||
+        state.activation?.passed !== true,
+    )
+    .map((state) => ({ state: state.state, keyboard: state.keyboard, activation: state.activation }));
+  const requiredDynamicStates = [
+    "extracted-review",
+    "analyzed-job",
+    "application-event",
+    "watchlist-form",
+    "copilot-panel",
+    "copilot-session",
+  ];
+  const missingDynamicStates = base_url
+    ? requiredDynamicStates.filter(
+        (requiredState) => !dynamicStates.some((state) => state.state === requiredState),
+      )
+    : [];
   return {
     schema_version: 2,
     base_url,
@@ -144,11 +177,18 @@ function buildReport({ routes, streamlit_version: installedVersion, base_url = n
     incomplete_findings: incomplete,
     keyboard_failure_count: keyboardFailures.length,
     keyboard_failures: keyboardFailures,
+    dynamic_keyboard_failure_count: dynamicKeyboardFailures.length,
+    dynamic_keyboard_failures: dynamicKeyboardFailures,
+    dynamic_states: dynamicStates,
+    missing_dynamic_states: missingDynamicStates,
     routes,
     passed:
       aaFailures.length === 0 &&
       unresolvedIncomplete.length === 0 &&
-      keyboardFailures.length === 0,
+      keyboardFailures.length === 0 &&
+      dynamicKeyboardFailures.length === 0 &&
+      missingDynamicStates.length === 0 &&
+      versionReviewed,
   };
 }
 
@@ -346,6 +386,121 @@ async function waitForStreamlit(page) {
   );
 }
 
+async function activateByKeyboard(locator, key = "Enter") {
+  await locator.waitFor({ state: "visible" });
+  await locator.focus();
+  const focusVisible = await locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return (
+      document.activeElement === element &&
+      (style.outlineStyle !== "none" || style.outlineWidth !== "0px" || style.boxShadow !== "none")
+    );
+  });
+  await locator.press(key);
+  await waitForStreamlit(locator.page());
+  return focusVisible;
+}
+
+async function auditState(page, axeSource, state, activation) {
+  await page.evaluate(axeSource);
+  const result = await page.evaluate(async () =>
+    globalThis.axe.run(document, {
+      runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"] },
+    }),
+  );
+  return {
+    state,
+    passes: result.passes.length,
+    incomplete: result.incomplete,
+    incomplete_reviews: await reviewIncomplete(page, result.incomplete),
+    violations: result.violations,
+    keyboard: await keyboardAudit(page),
+    activation,
+  };
+}
+
+async function scanDynamicPrimaryLoop(page, axeSource) {
+  const states = [];
+  const route = page.getByRole("radio", { name: "Analyze Job", exact: true });
+  const routeFocus = await activateByKeyboard(route, "Space");
+  await page.getByRole("heading", { name: "Analyze Job", exact: true }).waitFor();
+
+  const pasteTab = page.getByRole("tab", { name: "Paste job text", exact: true });
+  const tabFocus = await activateByKeyboard(pasteTab);
+  const rawText = page.getByRole("textbox", { name: "Paste job text", exact: true });
+  await rawText.fill(
+    "[SYNTHETIC]\nCompany: Keyboard Signal Labs\nJob Title: Forward Deployed AI Engineer\n" +
+      "Location: Hong Kong\nBuild production AI systems with customers using Python and APIs.",
+  );
+  const extractFocus = await activateByKeyboard(
+    page.getByRole("button", { name: "Extract fields", exact: true }),
+  );
+  await page.getByLabel("Company", { exact: true }).waitFor();
+  states.push(
+    await auditState(page, axeSource, "extracted-review", {
+      control: "Extract fields",
+      passed: routeFocus && tabFocus && extractFocus,
+    }),
+  );
+
+  const confirmFocus = await activateByKeyboard(
+    page.getByRole("button", { name: "Confirm & analyze", exact: true }),
+  );
+  await page.getByText("Analysis complete", { exact: false }).waitFor();
+  states.push(
+    await auditState(page, axeSource, "analyzed-job", {
+      control: "Confirm & analyze",
+      passed: confirmFocus,
+    }),
+  );
+
+  const applications = page.getByRole("radio", { name: "Applications", exact: true });
+  const applicationsFocus = await activateByKeyboard(applications, "Space");
+  await page.getByRole("heading", { name: "Applications", exact: true }).waitFor();
+  await page.getByLabel("Notes", { exact: true }).fill("[SYNTHETIC] Keyboard event");
+  const addFocus = await activateByKeyboard(page.getByRole("button", { name: "Add", exact: true }));
+  await page.getByRole("paragraph").filter({ hasText: "[SYNTHETIC] Keyboard event" }).waitFor();
+  states.push(
+    await auditState(page, axeSource, "application-event", {
+      control: "Add",
+      passed: applicationsFocus && addFocus,
+    }),
+  );
+
+  const watchList = page.getByRole("radio", { name: "Watch List", exact: true });
+  const watchFocus = await activateByKeyboard(watchList, "Space");
+  await page.getByRole("heading", { name: "Watch List", exact: true }).waitFor();
+  const addCompany = page
+    .locator("details")
+    .filter({ hasText: "Add Watch List company" })
+    .locator("summary");
+  const formFocus = await activateByKeyboard(addCompany);
+  await page.getByLabel("Company name", { exact: true }).waitFor();
+  states.push(
+    await auditState(page, axeSource, "watchlist-form", {
+      control: "Add Watch List company",
+      passed: watchFocus && formFocus,
+    }),
+  );
+
+  states.push(
+    await auditState(page, axeSource, "copilot-panel", {
+      control: "Persistent Career Copilot panel",
+      passed: true,
+    }),
+  );
+  const newSession = page.getByRole("button", { name: "New conversation", exact: true }).last();
+  const sessionFocus = await activateByKeyboard(newSession);
+  await page.getByRole("combobox", { name: "Conversation title", exact: true }).waitFor();
+  states.push(
+    await auditState(page, axeSource, "copilot-session", {
+      control: "New conversation",
+      passed: sessionFocus,
+    }),
+  );
+  return states;
+}
+
 async function scanApplication(options) {
   const { chromium } = loadPlaywright();
   const axeSource = readFileSync(resolveDependency("axe-core/axe.min.js"), "utf8");
@@ -367,12 +522,14 @@ async function scanApplication(options) {
     "Profile",
   ];
   const routeResults = [];
+  let dynamicStates = [];
   try {
     await page.goto(`${options["base-url"].replace(/\/$/, "")}/?lang=en`);
     await page.getByText("RoleRadar AI", { exact: true }).first().waitFor({ state: "visible" });
     await waitForStreamlit(page);
     for (const route of routeNames) {
-      await page.getByText(route, { exact: true }).first().click();
+      const control = page.getByRole("radio", { name: route, exact: true });
+      const activationFocusVisible = await activateByKeyboard(control, "Space");
       await page.waitForFunction(
         (routeName) =>
           [...document.querySelectorAll('input[type="radio"]')].some(
@@ -398,10 +555,13 @@ async function scanApplication(options) {
         incomplete_reviews: await reviewIncomplete(page, result.incomplete),
         violations: result.violations,
         keyboard: await keyboardAudit(page),
+        activation: { control: `Navigate to ${route}`, passed: activationFocusVisible },
       });
     }
+    dynamicStates = await scanDynamicPrimaryLoop(page, axeSource);
     return buildReport({
       routes: routeResults,
+      dynamic_states: dynamicStates,
       streamlit_version: streamlitVersion(),
       base_url: options["base-url"],
       engine: {

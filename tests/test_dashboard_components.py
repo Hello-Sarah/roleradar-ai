@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import httpx
 import pytest
 
@@ -167,6 +169,16 @@ def test_edited_preview_wins_over_rich_jd_aws_false_positive() -> None:
     assert payload["company"] == "Example Robotics"
     assert payload["description"] == extracted["description"]
     assert payload["source"] == "pasted_text"
+
+
+def test_accessible_date_text_fields_reject_invalid_iso_dates() -> None:
+    """Keep text-based date controls keyboard-accessible without accepting invalid dates."""
+    from app.dashboard.state import parse_optional_iso_date
+
+    assert parse_optional_iso_date("") is None
+    assert parse_optional_iso_date("2026-10-02") == date(2026, 10, 2)
+    with pytest.raises(ValueError, match="YYYY-MM-DD"):
+        parse_optional_iso_date("02/10/2026")
 
 
 def test_copilot_confirmation_exposes_every_mandatory_field_in_both_languages() -> None:

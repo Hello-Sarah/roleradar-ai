@@ -8,7 +8,7 @@ import streamlit as st
 
 from app.dashboard.client import RoleRadarClient
 from app.dashboard.components.states import render_state
-from app.dashboard.state import format_local_date, stable_key
+from app.dashboard.state import format_local_date, parse_optional_iso_date, stable_key
 from app.i18n.service import translate
 from app.schemas import ApplicationStatus, Locale
 
@@ -44,7 +44,11 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
                     index=statuses.index(job["status"]),
                     format_func=lambda value: translate(locale, _STATUS_KEYS[value]),
                 )
-                occurred_on = st.date_input(translate(locale, "application.date"), date.today())
+                occurred_on = st.text_input(
+                    translate(locale, "application.date"),
+                    date.today().isoformat(),
+                    placeholder="YYYY-MM-DD",
+                )
                 channels = list(_CHANNELS)
                 channel = st.selectbox(
                     translate(locale, "application.channel"),
@@ -52,21 +56,38 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
                     format_func=lambda value: translate(locale, _CHANNELS[value]),
                 )
                 notes = st.text_area(translate(locale, "application.notes"), max_chars=2_000)
-                follow_up = st.date_input(
-                    translate(locale, "application.follow_up_date"), value=None
+                follow_up = st.text_input(
+                    translate(locale, "application.follow_up_date"),
+                    value="",
+                    placeholder="YYYY-MM-DD",
                 )
                 add = st.form_submit_button(translate(locale, "action.add"), type="primary")
             if add:
+                try:
+                    occurred_date = parse_optional_iso_date(occurred_on)
+                except ValueError:
+                    st.error(translate(locale, "validation.application.invalid_date"))
+                    continue
+                try:
+                    follow_up_date = parse_optional_iso_date(follow_up)
+                except ValueError:
+                    st.error(translate(locale, "validation.application.invalid_follow_up_date"))
+                    continue
+                if occurred_date is None:
+                    st.error(translate(locale, "validation.application.invalid_date"))
+                    continue
                 client.post(
                     f"/api/v1/jobs/{job['id']}/application-events",
                     {
                         "status": status,
                         "occurred_at": datetime.combine(
-                            occurred_on, datetime.min.time()
+                            occurred_date, datetime.min.time()
                         ).isoformat(),
                         "channel": channel,
                         "notes": notes or None,
-                        "next_follow_up_date": follow_up.isoformat() if follow_up else None,
+                        "next_follow_up_date": follow_up_date.isoformat()
+                        if follow_up_date
+                        else None,
                     },
                 )
                 st.rerun()

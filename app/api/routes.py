@@ -28,7 +28,10 @@ from app.copilot.contracts import (
     ProposalCreateRequest,
 )
 from app.copilot.service import (
+    CopilotSessionError,
+    GroundedAnswer,
     add_message,
+    answer_question,
     create_session,
     delete_session,
     get_session,
@@ -554,6 +557,46 @@ def propose_copilot_action(
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ActionProposalError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
+
+
+@router.post(
+    "/copilot/answer",
+    response_model=GroundedAnswer,
+    status_code=status.HTTP_201_CREATED,
+)
+def answer_copilot_question(
+    payload: ActionIntentRequest, db: Db, settings: AppSettings
+) -> GroundedAnswer:
+    """Create a read-only answer grounded only in the explicitly selected context."""
+    try:
+        context = build_context(
+            ContextSelection(
+                route=payload.route,
+                job_id=payload.job_id,
+                company_id=payload.company_id,
+                session_id=payload.session_id,
+                cv_document_ids=payload.cv_document_ids,
+            ),
+            db,
+        )
+        db.rollback()
+        answer = answer_question(payload.message, context, settings)
+        add_message(
+            db,
+            payload.session_id,
+            CopilotMessageCreate(
+                role="assistant",
+                body=answer.answer,
+                sources=[source.model_dump(mode="json") for source in context.sources],
+            ),
+        )
+        return answer
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except CopilotSessionError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc

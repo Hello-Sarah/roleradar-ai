@@ -123,3 +123,39 @@ def test_reviewed_passing_incomplete_is_reported_without_false_failure(tmp_path:
     assert report["passed"] is True
     assert report["incomplete_review_count"] == 1
     assert report["unresolved_incomplete_count"] == 0
+
+
+def test_missing_dynamic_keyboard_activation_blocks_release(tmp_path: Path) -> None:
+    completed, report = _run_fixture(
+        tmp_path,
+        {
+            "streamlit_version": "1.62.0",
+            "routes": [
+                {
+                    "route": "Dashboard",
+                    "violations": [],
+                    "incomplete": [],
+                    "keyboard": {
+                        "all_controls_reached": True,
+                        "all_controls_named": True,
+                        "all_focus_visible": True,
+                    },
+                }
+            ],
+            "dynamic_states": [
+                {
+                    "state": "extracted-review",
+                    "keyboard": {
+                        "all_controls_reached": True,
+                        "all_controls_named": True,
+                        "all_focus_visible": True,
+                    },
+                    "activation": {"control": "Confirm & analyze", "passed": False},
+                }
+            ],
+        },
+    )
+
+    assert completed.returncode == 1
+    assert report["passed"] is False
+    assert report["dynamic_keyboard_failure_count"] == 1

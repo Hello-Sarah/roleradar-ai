@@ -1,8 +1,10 @@
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from openai import OpenAI
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -19,6 +21,44 @@ from app.database.models import CopilotMessage, CopilotSession
 from app.schemas import ApplicationStatus
 
 logger = logging.getLogger(__name__)
+
+
+class GroundedAnswer(BaseModel):
+    """A read-only Copilot response whose citations are explicit context record IDs."""
+
+    answer: str = Field(min_length=1, max_length=4_000)
+    source_ids: list[str] = Field(min_length=1)
+
+
+def _context_source_ids(context: CopilotContext) -> list[str]:
+    source_ids = [f"{source.record_type}:{source.record_id}" for source in context.sources]
+    if context.job is not None and f"job:{context.job.id}" not in source_ids:
+        source_ids.insert(0, f"job:{context.job.id}")
+    return source_ids
+
+
+def answer_question(
+    message: str,
+    context: CopilotContext,
+    settings: Settings,
+    *,
+    provider_call: Callable[[str, CopilotContext, Settings], GroundedAnswer] | None = None,
+) -> GroundedAnswer:
+    """Answer from the selected context without writes or unrelated/private records."""
+    allowed_sources = _context_source_ids(context)
+    if not allowed_sources or context.job is None:
+        raise CopilotSessionError("Select one record before asking a contextual question")
+    if provider_call is not None:
+        answer = provider_call(message, context, settings)
+    else:
+        # The local fallback deliberately quotes selected evidence instead of inventing prose.
+        answer = GroundedAnswer(
+            answer=(f"{context.job.company} — {context.job.title}: {context.job.description}"),
+            source_ids=[f"job:{context.job.id}"],
+        )
+    if not set(answer.source_ids).issubset(allowed_sources):
+        raise CopilotSessionError("Copilot answer cited a record outside the selected context")
+    return answer
 
 
 def _proposal_uses_selected_target(proposal: ActionProposal, context: CopilotContext) -> bool:

@@ -42,6 +42,12 @@ class EvalItem(BaseModel):
     @model_validator(mode="after")
     def validate_suite_contract(self) -> EvalItem:
         errors: list[str] = []
+        forbidden_output_keys = {"actual", "output", "output_claims"}
+        supplied_output_keys = forbidden_output_keys.intersection(self.input)
+        if supplied_output_keys:
+            errors.append(
+                "candidate output is forbidden in input: " + ", ".join(sorted(supplied_output_keys))
+            )
         if not self.synthetic or self.redaction_marker not in {"[SYNTHETIC]", "[REDACTED]"}:
             errors.append("a synthetic/redaction marker is required")
         if self.redaction_marker and self.redaction_marker not in json.dumps(
@@ -90,7 +96,8 @@ class EvalDataset(BaseModel):
 
 def _contains_private_value(value: Any) -> bool:
     if isinstance(value, str):
-        return bool(_EMAIL.search(value) or _PHONE.search(value))
+        without_iso_dates = re.sub(r"\b\d{4}-\d{2}-\d{2}\b", "", value)
+        return bool(_EMAIL.search(value) or _PHONE.search(without_iso_dates))
     if isinstance(value, dict):
         return any(_contains_private_value(item) for item in value.values())
     if isinstance(value, list):

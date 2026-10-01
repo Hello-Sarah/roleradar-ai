@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -380,6 +381,7 @@ def prepare_tailored_cv(
     settings: Settings,
     *,
     source_cv_ids: list[int] | None = None,
+    content_provider: Callable[[list[CVDocument], Job, Settings], TailoredCVContent] | None = None,
 ) -> PreparedTailoredCV:
     job = db.get(Job, job_id)
     if job is None:
@@ -397,7 +399,7 @@ def prepare_tailored_cv(
     document_snapshots = [_cv_snapshot(document) for document in documents]
     # Provider access and file generation must not hold a database transaction open.
     db.rollback()
-    content = _generate_content(document_snapshots, job_snapshot, settings)
+    content = (content_provider or _generate_content)(document_snapshots, job_snapshot, settings)
     # Preserve this deterministic gate at the generation boundary so validation cannot be
     # bypassed by a future provider adapter or an internal caller.
     _validate_evidence(content, _source_corpus(document_snapshots))
@@ -506,8 +508,15 @@ def generate_tailored_cv(
     *,
     source_cv_ids: list[int] | None = None,
     commit: bool = True,
+    content_provider: Callable[[list[CVDocument], Job, Settings], TailoredCVContent] | None = None,
 ) -> GeneratedCVRead:
-    prepared = prepare_tailored_cv(db, job_id, settings, source_cv_ids=source_cv_ids)
+    prepared = prepare_tailored_cv(
+        db,
+        job_id,
+        settings,
+        source_cv_ids=source_cv_ids,
+        content_provider=content_provider,
+    )
     try:
         generated = persist_prepared_tailored_cv(db, prepared)
         if commit:
