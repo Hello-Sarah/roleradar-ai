@@ -38,10 +38,25 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
                 apply_job_filter(st.session_state, status=status, minimum_score=minimum_score)
                 st.rerun()
     st.subheader(translate(locale, "dashboard.next_action"))
-    if data["high_priority_jobs"]:
-        render_job_card(
-            data["high_priority_jobs"][0], region="dashboard-next", locale=locale, client=client
-        )
+    next_action = data.get("next_action")
+    if next_action and next_action["kind"] == "follow_up":
+        job = next_action["job"]
+        with st.container(border=True):
+            st.write(f"**{job['company']} — {job['title']}**")
+            st.caption(
+                translate(locale, f"dashboard.follow_up_{next_action['follow_up_timing']}")
+                + " · "
+                + format_local_date(locale, next_action["next_follow_up_date"])
+            )
+            if st.button(
+                translate(locale, "dashboard.view_records"),
+                key=f"dashboard-next-follow-up-{job['id']}",
+            ):
+                apply_job_filter(st.session_state, status=job["status"])
+                st.session_state["ui.selected_job_id"] = job["id"]
+                st.rerun()
+    elif next_action:
+        render_job_card(next_action["job"], region="dashboard-next", locale=locale, client=client)
     else:
         render_state(locale, "empty", translate(locale, "dashboard.empty"))
     st.subheader(translate(locale, "dashboard.follow_ups_due"))
@@ -51,7 +66,11 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
         job = follow_up["job"]
         with st.container(border=True):
             st.write(f"**{job['company']} — {job['title']}**")
-            st.caption(format_local_date(locale, follow_up["next_follow_up_date"]))
+            st.caption(
+                translate(locale, f"dashboard.follow_up_{follow_up['timing']}")
+                + " · "
+                + format_local_date(locale, follow_up["next_follow_up_date"])
+            )
             if follow_up.get("notes"):
                 st.write(follow_up["notes"])
             if st.button(
@@ -62,7 +81,12 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
                 st.session_state["ui.selected_job_id"] = job["id"]
                 st.rerun()
     st.subheader(translate(locale, "dashboard.high_priority_jobs"))
-    for job in data["high_priority_jobs"][1:]:
+    next_job_id = (
+        next_action["job"]["id"] if next_action and next_action["kind"] == "review_job" else None
+    )
+    for job in data["high_priority_jobs"]:
+        if job["id"] == next_job_id:
+            continue
         render_job_card(job, region="dashboard-priority", locale=locale, client=client)
     charts = st.columns(2)
     with charts[0]:

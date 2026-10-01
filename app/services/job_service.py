@@ -27,6 +27,7 @@ from app.schemas import (
     CandidateProfileRead,
     CandidateProfileVersionRead,
     ClassificationRead,
+    DashboardNextActionRead,
     DashboardRead,
     DigestRead,
     DigestTrendRead,
@@ -315,7 +316,7 @@ def list_jobs(
     min_fit_score: int | None = None,
     limit: int = 100,
 ) -> list[Job]:
-    query = _job_query().order_by(desc(Job.created_at)).limit(limit)
+    query = _job_query().order_by(desc(Job.created_at), desc(Job.id)).limit(limit)
     if status:
         query = query.where(Job.status == status.value)
     if min_fit_score is not None:
@@ -420,9 +421,22 @@ def _gap_counts(jobs: list[Job]) -> list[tuple[str, int]]:
     return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
 
 
-def get_dashboard(db: Session) -> DashboardRead:
+def _is_v2_high_priority(job: Job) -> bool:
+    analysis = job.analysis
+    return bool(
+        analysis
+        and analysis.scoring_version == SCORING_VERSION
+        and analysis.recommendation in {"Must Apply", "Strong Apply"}
+    )
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def get_dashboard(db: Session, *, as_of: datetime | None = None) -> DashboardRead:
     jobs = list_jobs(db, limit=500)
-    high_priority = [job for job in jobs if job.analysis and job.analysis.fit_score >= 75]
+    high_priority = [job for job in jobs if _is_v2_high_priority(job)]
     status_counts = {status.value: 0 for status in ApplicationStatus}
     for job in jobs:
         status_counts[job.status] = status_counts.get(job.status, 0) + 1
@@ -435,7 +449,8 @@ def get_dashboard(db: Session) -> DashboardRead:
     week_rows = [
         (week, len(scores), sum(scores) / len(scores)) for week, scores in sorted(grouped.items())
     ]
-    today = datetime.now(UTC).date()
+    now = as_of or datetime.now(UTC)
+    today = now.date()
     terminal_statuses = {
         ApplicationStatus.OFFER.value,
         ApplicationStatus.REJECTED.value,
@@ -445,19 +460,40 @@ def get_dashboard(db: Session) -> DashboardRead:
     for job in jobs:
         if job.status in terminal_statuses:
             continue
-        latest_follow_up = next(
-            (event for event in job.application_events if event.next_follow_up_date),
-            None,
+        latest_event = max(
+            job.application_events,
+            key=lambda event: (event.occurred_at, event.id),
+            default=None,
         )
-        if latest_follow_up and latest_follow_up.next_follow_up_date <= today:
+        if latest_event and latest_event.next_follow_up_date is not None:
+            follow_up_date = latest_event.next_follow_up_date
+        else:
+            follow_up_date = None
+        if follow_up_date is not None and follow_up_date <= today:
             due_follow_ups.append(
                 DueFollowUpRead(
                     job=to_job_read(job),
-                    next_follow_up_date=latest_follow_up.next_follow_up_date,
-                    notes=latest_follow_up.notes,
+                    next_follow_up_date=follow_up_date,
+                    timing="overdue" if follow_up_date < today else "due",
+                    notes=latest_event.notes,
                 )
             )
-    due_follow_ups.sort(key=lambda item: item.next_follow_up_date)
+    due_follow_ups.sort(key=lambda item: (item.next_follow_up_date, item.job.id))
+    if due_follow_ups:
+        first_follow_up = due_follow_ups[0]
+        next_action = DashboardNextActionRead(
+            kind="follow_up",
+            job=first_follow_up.job,
+            follow_up_timing=first_follow_up.timing,
+            next_follow_up_date=first_follow_up.next_follow_up_date,
+        )
+    elif high_priority:
+        next_action = DashboardNextActionRead(
+            kind="review_job",
+            job=to_job_read(high_priority[0]),
+        )
+    else:
+        next_action = None
     return DashboardRead(
         high_priority_jobs=[to_job_read(job) for job in high_priority[:10]],
         recently_added_jobs=[to_job_read(job) for job in jobs[:10]],
@@ -468,14 +504,16 @@ def get_dashboard(db: Session) -> DashboardRead:
             for week, count, avg in week_rows
         ],
         due_follow_ups=due_follow_ups,
+        next_action=next_action,
     )
 
 
-def get_daily_digest(db: Session) -> DigestRead:
+def get_daily_digest(db: Session, *, as_of: datetime | None = None) -> DigestRead:
     jobs = list_jobs(db, limit=500)
-    cutoff = datetime.now(UTC) - timedelta(days=1)
-    recent = [job for job in jobs if job.created_at.replace(tzinfo=UTC) >= cutoff]
-    priority = [job for job in recent if job.analysis and job.analysis.fit_score >= 75]
+    now = as_of or datetime.now(UTC)
+    cutoff = now - timedelta(days=1)
+    recent = [job for job in jobs if cutoff <= _utc(job.created_at) <= now]
+    priority = [job for job in recent if _is_v2_high_priority(job)]
     companies = sorted({job.company for job in recent})
     categories: dict[str, int] = {}
     for job in recent:
@@ -487,7 +525,7 @@ def get_daily_digest(db: Session) -> DigestRead:
         for category, count in categories.items()
     ]
     return DigestRead(
-        generated_at=datetime.now(UTC),
+        generated_at=now,
         high_priority_jobs=[to_job_read(job) for job in priority],
         new_companies=companies,
         emerging_skills=_gap_counts(recent)[:5],

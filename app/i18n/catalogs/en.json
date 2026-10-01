@@ -224,6 +224,8 @@
   "cv.source_files_read_only": "Original files remain read-only and are excluded from Git.",
   "cv.target_job": "Target job",
   "dashboard.follow_ups_due": "Follow-ups due",
+  "dashboard.follow_up_due": "Due today",
+  "dashboard.follow_up_overdue": "Overdue",
   "dashboard.view_records": "View records",
   "dashboard.jobs_count": "Jobs",
   "jobs.active_filter": "Showing records for: {filter_value}",

@@ -56,13 +56,13 @@ class RecordingClient:
         raise AssertionError(f"Unexpected POST {path}")
 
 
-def _render_analyze(client: RecordingClient) -> None:
+def _render_analyze(client) -> None:
     from app.dashboard.pages.analyze import render_page
 
     render_page(client, "en")
 
 
-def _render_chinese_job_card(client: RecordingClient) -> None:
+def _render_chinese_job_card(client) -> None:
     from app.dashboard.components.job_card import render_job_card
 
     render_job_card(
@@ -122,9 +122,16 @@ class DashboardClient(RecordingClient):
                     {
                         "job": job,
                         "next_follow_up_date": "2026-09-01",
+                        "timing": "overdue",
                         "notes": "Send hiring manager note",
                     }
                 ],
+                "next_action": {
+                    "kind": "follow_up",
+                    "job": job,
+                    "follow_up_timing": "overdue",
+                    "next_follow_up_date": "2026-09-01",
+                },
             }
         return super().get(path)
 
@@ -146,6 +153,7 @@ class ShellClient(DashboardClient):
                 "skill_gap_trends": [],
                 "weekly_hiring_trends": [],
                 "due_follow_ups": [],
+                "next_action": None,
             }
         if path == "/api/v1/jobs":
             return []
@@ -174,13 +182,13 @@ class ShellClient(DashboardClient):
         raise AssertionError(f"Unexpected GET {path}")
 
 
-def _render_shell(client: ShellClient) -> None:
+def _render_shell(client) -> None:
     from app.dashboard.streamlit_app import render_app
 
     render_app(client)
 
 
-def _render_shell_with_cookie(client: ShellClient) -> None:
+def _render_shell_with_cookie(client) -> None:
     import app.dashboard.streamlit_app as streamlit_app
 
     original = streamlit_app._stored_browser_locale
@@ -191,7 +199,7 @@ def _render_shell_with_cookie(client: ShellClient) -> None:
         streamlit_app._stored_browser_locale = original
 
 
-def _render_dashboard(client: DashboardClient) -> None:
+def _render_dashboard(client) -> None:
     from app.dashboard.pages.dashboard import render_page
 
     render_page(client, "zh-Hans")
@@ -213,7 +221,7 @@ class CVClient(RecordingClient):
         return super().get(path)
 
 
-def _render_cv_library(client: CVClient) -> None:
+def _render_cv_library(client) -> None:
     from app.dashboard.pages.cv_library import render_page
 
     render_page(client, "zh-Hans")
@@ -228,7 +236,7 @@ class FailingCopilotClient(RecordingClient):
         return super().get(path)
 
 
-def _render_failing_copilot(client: FailingCopilotClient) -> None:
+def _render_failing_copilot(client) -> None:
     from app.dashboard.components.copilot_panel import render_copilot_panel
     from app.dashboard.state import UIContext
 
@@ -255,7 +263,7 @@ class ProposalClient(RecordingClient):
         return super().post(path, payload)
 
 
-def _render_pending_copilot(client: ProposalClient) -> None:
+def _render_pending_copilot(client) -> None:
     from app.dashboard.components.copilot_panel import render_copilot_panel
     from app.dashboard.state import UIContext
 
@@ -287,13 +295,13 @@ class DigestClient(RecordingClient):
         return super().get(path)
 
 
-def _render_chinese_digest(client: DigestClient) -> None:
+def _render_chinese_digest(client) -> None:
     from app.dashboard.pages.digest import render_page
 
     render_page(client, "zh-Hans")
 
 
-def _render_chinese_jobs_filter(client: RecordingClient, filter_kind: str) -> None:
+def _render_chinese_jobs_filter(client, filter_kind) -> None:
     import streamlit as st
 
     from app.dashboard.pages.jobs import render_page
@@ -312,7 +320,7 @@ class FailingPageClient(ShellClient):
         return super().get(path)
 
 
-def _render_duplicate_job_cards(client: RecordingClient) -> None:
+def _render_duplicate_job_cards(client) -> None:
     from app.dashboard.components.job_card import render_job_card
 
     job = {
@@ -335,7 +343,7 @@ def _render_duplicate_job_cards(client: RecordingClient) -> None:
     render_job_card(job, region="dashboard-recent", locale="en", client=client)
 
 
-def _render_route(client: ShellClient, route: str, locale: str) -> None:
+def _render_route(client, route, locale) -> None:
     from app.dashboard.streamlit_app import page_renderers
 
     page_renderers()[route](client, locale)

@@ -64,6 +64,7 @@ def test_application_record_timeline(client: TestClient) -> None:
         {
             "job": client.get(f"/api/v1/jobs/{job['id']}").json(),
             "next_follow_up_date": "2026-09-01",
+            "timing": "overdue",
             "notes": "Submitted with employee referral.",
         }
     ]

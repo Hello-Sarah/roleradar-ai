@@ -35,8 +35,12 @@ dev = [
 packages = ["app"]
 
 [tool.pytest.ini_options]
-addopts = "-q --disable-warnings --cov=app --cov-report=term-missing"
+addopts = "-q --disable-warnings --cov --cov-report=term-missing"
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["app"]
+relative_files = true
 
 [tool.ruff]
 line-length = 100
