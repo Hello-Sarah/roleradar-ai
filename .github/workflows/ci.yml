@@ -6,6 +6,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      EVIDENCE_DIR: ${{ runner.temp }}/acceptance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,13 +17,27 @@ jobs:
       - run: pip install -e '.[dev]'
       - run: python -m playwright install --with-deps chromium webkit
       - run: npm install --prefix "$RUNNER_TEMP/roleradar-node" axe-core@4.10.3
-      - run: ruff check .
-      - run: ruff format --check .
-      - run: pytest
-      - name: Browser acceptance
-        env:
-          EVIDENCE_DIR: ${{ runner.temp }}/acceptance
+      - name: Record Ruff
         run: >-
+          python scripts/build_acceptance_bundle.py record
+          --source "$EVIDENCE_DIR" --name ruff --output automated-tests/ruff.txt --
+          ruff check .
+      - name: Record formatting
+        run: >-
+          python scripts/build_acceptance_bundle.py record
+          --source "$EVIDENCE_DIR" --name format --output automated-tests/format.txt --
+          ruff format --check .
+      - name: Record unit and integration tests
+        run: >-
+          python scripts/build_acceptance_bundle.py record
+          --source "$EVIDENCE_DIR" --name pytest
+          --output automated-tests/pytest-command.txt --
+          pytest --junitxml="$EVIDENCE_DIR/automated-tests/pytest.xml" --cov
+          --cov-report="xml:$EVIDENCE_DIR/automated-tests/coverage.xml"
+      - name: Browser acceptance
+        run: >-
+          python scripts/build_acceptance_bundle.py record
+          --source "$EVIDENCE_DIR" --name e2e --output automated-tests/e2e-results.json --
           pytest tests/e2e --browser chromium --browser webkit
           --tracing retain-on-failure
           --output="$EVIDENCE_DIR/browser-results"
@@ -44,6 +60,26 @@ jobs:
               curl --fail --silent http://127.0.0.1:8501/_stcore/health >/dev/null && break
             sleep 1
           done
-          node scripts/run_accessibility.mjs \
-            --base-url http://127.0.0.1:8501 \
-            --output "${{ runner.temp }}/acceptance/automated-tests/accessibility.json"
+          python scripts/build_acceptance_bundle.py record \
+            --source "$EVIDENCE_DIR" --name accessibility \
+            --output automated-tests/accessibility-command.txt -- \
+            node scripts/run_accessibility.mjs \
+              --base-url http://127.0.0.1:8501 \
+              --output "$EVIDENCE_DIR/automated-tests/accessibility.json"
+      - name: Release Eval
+        run: >-
+          python scripts/build_acceptance_bundle.py record
+          --source "$EVIDENCE_DIR" --name eval --output automated-tests/eval-command.txt --
+          python -m app.evals.runner --dataset evals/datasets/v1.jsonl
+          --output "$EVIDENCE_DIR/automated-tests"
+      - name: Validate complete acceptance bundle
+        run: |
+          COMMIT="$(git rev-parse HEAD)"
+          python scripts/build_acceptance_bundle.py acceptance \
+            --source "$EVIDENCE_DIR" --commit "$COMMIT" --environment "GitHub Actions ubuntu-latest"
+          python scripts/build_acceptance_bundle.py \
+            --source "$EVIDENCE_DIR" --output-root "${{ runner.temp }}/artifacts/acceptance" \
+            --version v1 --model-id deterministic-release-v2 --prompt-version none \
+            --rubric-version eval-graders-v1 --dataset-version v1 \
+            --browser-versions chromium=playwright-managed,webkit=playwright-managed \
+            --node-version "$(node --version)"

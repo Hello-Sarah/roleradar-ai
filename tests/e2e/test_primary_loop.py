@@ -20,9 +20,11 @@ def _open_route(page: Any, name: str) -> None:
 
 
 def _choose_streamlit_option(page: Any, label: str, option: str) -> None:
-    page.get_by_role("combobox", name=label).last.click()
-    page.get_by_text(option, exact=True).last.click()
-    expect(page.get_by_role("combobox", name=label).last).to_have_value(option)
+    combobox = page.get_by_role("combobox", name=label).last
+    combobox.click()
+    page.keyboard.type(option)
+    page.keyboard.press("Enter")
+    expect(combobox).to_have_value(option)
 
 
 def _wait_for_status(api_client: Any, expected_status: str, timeout: float = 5) -> None:
@@ -50,6 +52,9 @@ def test_pasted_job_to_application_watchlist_and_tailored_cv(
     expect(page.get_by_text("Nothing has been saved yet.", exact=False)).to_be_visible()
     expect(page.get_by_label("Company")).to_have_value("Synthetic Signal Labs")
     expect(page.get_by_label("Job title")).to_have_value("Forward Deployed AI Engineer")
+    page.get_by_label("Company").fill("Synthetic Edited Labs")
+    page.get_by_label("Job title").fill("Edited Forward Deployed AI Engineer")
+    page.get_by_label("Location").fill("Kowloon, Hong Kong")
     page.get_by_role("button", name="Confirm & analyze").click()
     expect(page.get_by_text("Analysis complete", exact=False)).to_be_visible()
 
@@ -85,6 +90,9 @@ def test_pasted_job_to_application_watchlist_and_tailored_cv(
     assert provider_call_log.read_text(encoding="utf-8").splitlines() == ["tailored_cv"]
     jobs = api_client.get("/api/v1/jobs").json()
     assert len(jobs) == 1
+    assert jobs[0]["company"] == "Synthetic Edited Labs"
+    assert jobs[0]["title"] == "Edited Forward Deployed AI Engineer"
+    assert jobs[0]["location"] == "Kowloon, Hong Kong"
     assert jobs[0]["status"] == "Applied"
     assert any(
         event["notes"] == "Synthetic application event for acceptance testing"
@@ -108,6 +116,12 @@ def test_primary_loop_and_copilot_are_non_blocking_at_390px(
     expect(page.get_by_text("Analysis complete", exact=False)).to_be_visible()
     _choose_streamlit_option(page, "Application status", "Saved")
     _wait_for_status(api_client, "Saved")
+    _choose_streamlit_option(page, "Application status", "Applied")
+    _wait_for_status(api_client, "Applied")
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     page.get_by_role("button", name="Open Career Copilot").first.click()
     expect(page.get_by_role("dialog")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    bounds = page.get_by_role("dialog").bounding_box()
+    assert bounds is not None
+    assert bounds["x"] <= 1 and bounds["width"] >= 388

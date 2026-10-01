@@ -17,6 +17,18 @@ DESKTOP_ROUTES = {
 }
 
 
+def _assert_material_icons_render(page: Any) -> None:
+    broken = page.locator('[data-testid="stIconMaterial"]:visible').evaluate_all(
+        """items => items.filter(item => {
+          const text = (item.textContent || '').trim();
+          const family = getComputedStyle(item).fontFamily.toLowerCase();
+          return /(?:keyboard_)?double_arrow_(?:left|right)/.test(text) &&
+            !family.includes('material symbols');
+        }).map(item => item.textContent.trim())"""
+    )
+    assert broken == []
+
+
 @pytest.mark.parametrize(("locale", "language_label"), [("en", "EN"), ("zh", "中文")])
 def test_bilingual_visual_routes_use_identical_redacted_seed(
     seeded_roleradar_page: Any,
@@ -34,6 +46,7 @@ def test_bilingual_visual_routes_use_identical_redacted_seed(
                 "heading", name=en_heading if locale == "en" else zh_heading, exact=True
             )
         ).to_be_visible()
+        _assert_material_icons_render(page)
         page.screenshot(path=screenshot_path(locale, f"{slug}.png"), full_page=True)
 
 
@@ -45,13 +58,72 @@ def test_narrow_visuals_have_no_horizontal_overflow(
     for index, (slug, route) in enumerate((("dashboard", "Dashboard"), ("job-detail", "Jobs"))):
         if index:
             page.get_by_test_id("stExpandSidebarButton").click()
+            sidebar = page.locator('[data-testid="stSidebar"][aria-expanded="true"]')
+            expect(sidebar).to_be_visible()
+            page.wait_for_function(
+                "element => element.getBoundingClientRect().width >= 388",
+                arg=sidebar.element_handle(),
+            )
+            sidebar_bounds = sidebar.bounding_box()
+            assert sidebar_bounds is not None and sidebar_bounds["width"] >= 388
             page.get_by_text(route, exact=True).first.click()
             page.get_by_test_id("stSidebarCollapseButton").click()
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         page.screenshot(path=screenshot_path("narrow", f"{slug}.png"), full_page=True)
     page.get_by_role("button", name="Open Career Copilot").first.click()
     expect(page.get_by_role("dialog")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+    dialog_bounds = page.get_by_role("dialog").bounding_box()
+    assert dialog_bounds is not None and dialog_bounds["width"] >= 388
+    _assert_material_icons_render(page)
     page.screenshot(path=screenshot_path("narrow", "copilot.png"), full_page=True)
+
+
+@pytest.mark.parametrize(
+    ("browser_locale", "heading"),
+    [("zh-CN", "把重要的职业决策排在前面。"), ("fr-FR", "Good decisions, clearly prioritized.")],
+)
+def test_first_visit_uses_browser_language(
+    browser: Any, app_runtime: Any, browser_locale: str, heading: str
+) -> None:
+    context = browser.new_context(locale=browser_locale)
+    page = context.new_page()
+    try:
+        page.goto(app_runtime.app_url)
+        expect(page.get_by_role("heading", name=heading, exact=True)).to_be_visible(timeout=20_000)
+    finally:
+        context.close()
+
+
+def test_language_choice_survives_refresh_and_reopen_without_database_changes(
+    browser: Any, app_runtime: Any, api_client: Any
+) -> None:
+    context = browser.new_context(locale="en-US")
+    before = {
+        "jobs": api_client.get("/api/v1/jobs").json(),
+        "companies": api_client.get("/api/v1/watchlist/companies").json(),
+    }
+    page = context.new_page()
+    try:
+        page.goto(app_runtime.app_url)
+        expect(
+            page.get_by_role("heading", name="Good decisions, clearly prioritized.")
+        ).to_be_visible(timeout=20_000)
+        page.get_by_text("中文", exact=True).click()
+        expect(page.get_by_role("heading", name="把重要的职业决策排在前面。")).to_be_visible()
+        page.reload()
+        expect(page.get_by_role("heading", name="把重要的职业决策排在前面。")).to_be_visible()
+        page.close()
+        reopened = context.new_page()
+        reopened.goto(app_runtime.app_url)
+        expect(reopened.get_by_role("heading", name="把重要的职业决策排在前面。")).to_be_visible()
+        after = {
+            "jobs": api_client.get("/api/v1/jobs").json(),
+            "companies": api_client.get("/api/v1/watchlist/companies").json(),
+        }
+        assert after == before
+    finally:
+        context.close()
 
 
 def test_bilingual_error_state_is_captured(

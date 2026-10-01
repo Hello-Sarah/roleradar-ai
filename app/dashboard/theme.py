@@ -13,7 +13,7 @@ def calm_intelligence_css() -> str:
       --rr-warning: #B35C00; --rr-danger: #D70015; --rr-hairline: #D2D2D7;
       --rr-radius: 18px;
     }
-    html, body, [class*="st-"] {
+    html, body, button, input, textarea, select, [data-testid="stMarkdownContainer"] {
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text",
         "PingFang SC", "Helvetica Neue", Arial, sans-serif;
     }
@@ -41,13 +41,25 @@ def calm_intelligence_css() -> str:
     .stApp p, .stApp label, [data-testid="stCaptionContainer"] {
       color: var(--rr-secondary) !important;
     }
+    [data-testid="stCaptionContainer"],
+    [data-testid="stCaptionContainer"] p {
+      color: #454549 !important; opacity: 1 !important;
+    }
+    .stApp [data-testid="stAlert"] p,
+    .stApp [data-testid="stAlert"] strong { color: #3A3A3C !important; }
+    .stApp [data-variant="segmented_control"] p { color: #3A3A3C !important; }
     [data-testid="stCaptionContainer"] { font-size: 13px; }
     .stButton > button[kind="primary"], .stFormSubmitButton > button[kind="primary"] {
       background: var(--rr-blue); border-color: var(--rr-blue);
       border-radius: 999px; min-height: 44px;
     }
     .stButton > button[kind="primary"] p,
-    .stFormSubmitButton > button[kind="primary"] p { color: #FFFFFF !important; }
+    .stButton > button[kind^="primary"] p,
+    .stFormSubmitButton > button[kind^="primary"] p { color: #FFFFFF !important; }
+    .stButton > button:not([kind^="primary"]) p,
+    .stFormSubmitButton > button:not([kind^="primary"]) p,
+    [data-testid="stBaseButton-secondary"] p { color: #3A3A3C !important; }
+    [data-testid="stSidebarCollapseButton"] { display: none; }
     button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible,
     [role="button"]:focus-visible, [role="radio"]:focus-visible {
       outline: 3px solid rgba(0, 113, 227, .45) !important; outline-offset: 3px;
@@ -59,19 +71,23 @@ def calm_intelligence_css() -> str:
       html, body, .stApp { max-width: 100vw; overflow-x: hidden; }
       [data-testid="stMainBlockContainer"] { padding: 1rem 1rem 3rem; max-width: 100%; }
       [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
-      [data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 0; }
-      .st-key-mobile_copilot_launcher { display: block; }
-      .st-key-desktop_copilot_panel { display: none; }
-      [data-testid="stSidebarCollapsedControl"] button,
-      [data-testid="stSidebarCollapseButton"] button { font-size: 0; }
+      [data-testid="stSidebar"][aria-expanded="true"] {
+        width: 100vw !important; min-width: 100vw !important; max-width: 100vw !important;
+      }
+      [data-testid="stSidebarCollapseButton"] { display: block; }
       [data-testid="stSidebarCollapsedControl"] button [data-testid="stIconMaterial"],
       [data-testid="stSidebarCollapseButton"] button [data-testid="stIconMaterial"] {
-        display: none;
+        font-size: 0 !important;
       }
+      [data-testid="stSidebarCollapsedControl"] button,
+      [data-testid="stSidebarCollapseButton"] button { font-size: 0; }
       [data-testid="stSidebarCollapsedControl"] button::before,
       [data-testid="stSidebarCollapseButton"] button::before {
         content: "☰"; color: var(--rr-text); font-size: 20px;
       }
+      [data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 0; }
+      .st-key-mobile_copilot_launcher { display: block; }
+      .st-key-desktop_copilot_panel { display: none; }
       [data-testid="stDialog"] [role="dialog"] {
         position: fixed; inset: 0; width: 100vw; max-width: none;
         height: 100dvh; max-height: none; border-radius: 0;

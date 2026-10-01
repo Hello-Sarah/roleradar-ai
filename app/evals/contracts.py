@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Suite = Literal["jd", "cv_pair", "copilot_normal", "copilot_adversarial"]
 Locale = Literal["en", "zh-Hans"]
@@ -22,6 +22,8 @@ class DatasetValidationError(ValueError):
 
 
 class EvalItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     dataset_version: str = Field(min_length=1)
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]+$")
     suite: Suite
@@ -30,7 +32,6 @@ class EvalItem(BaseModel):
     redaction_marker: str
     input: dict[str, Any]
     expected: dict[str, Any]
-    actual: dict[str, Any]
     grader_version: str = Field(min_length=1)
     model_id: str = Field(min_length=1)
     prompt_version: str = Field(min_length=1)

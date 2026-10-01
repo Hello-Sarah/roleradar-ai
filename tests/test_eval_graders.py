@@ -4,6 +4,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
+from app.evals.adapters import DeterministicReleaseAdapter
 from app.evals.contracts import load_dataset
 from app.evals.graders import (
     grade_bilingual_parity,
@@ -76,7 +77,10 @@ def test_matching_release_critical_jd_pair_passes_bilingual_parity() -> None:
     )
     chinese = next(item for item in dataset.items if item.id == english.pair_id)
 
-    assert grade_bilingual_parity(english.actual, chinese.actual).passed is True
+    adapter = DeterministicReleaseAdapter()
+    assert (
+        grade_bilingual_parity(adapter.evaluate(english), adapter.evaluate(chinese)).passed is True
+    )
 
 
 def test_copilot_bilingual_parity_compares_action_and_write_count() -> None:

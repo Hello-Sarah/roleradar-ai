@@ -21,13 +21,6 @@ def _item(item_id: str, suite: str = "jd", **overrides):
             "score_range": [70, 85],
             "recommendation": "Strong Apply",
         },
-        "actual": {
-            "classification_label": "Applied AI Engineer",
-            "scores": [75, 75],
-            "recommendation": "Strong Apply",
-            "available_evidence_ids": ["jd-1"],
-            "evidence_ids": ["jd-1"],
-        },
         "grader_version": "v1",
         "model_id": "deterministic",
         "prompt_version": "none",
@@ -52,6 +45,14 @@ def test_dataset_rejects_duplicate_ids_and_private_looking_values(tmp_path: Path
     _write(private, [_item("private", input={"text": "person@example.com +852 9123 4567"})])
     with pytest.raises(DatasetValidationError, match="private-looking"):
         load_dataset(private, enforce_minimums=False)
+
+
+def test_dataset_rejects_committed_actual_output(tmp_path: Path) -> None:
+    supplied_output = tmp_path / "supplied-output.jsonl"
+    _write(supplied_output, [_item("supplied", actual={"recommendation": "Must Apply"})])
+
+    with pytest.raises(DatasetValidationError, match="actual"):
+        load_dataset(supplied_output, enforce_minimums=False)
 
 
 def test_dataset_requires_labels_ranges_redaction_and_valid_bilingual_pairs(tmp_path: Path) -> None:
@@ -105,3 +106,35 @@ def test_runner_writes_privacy_safe_versioned_reports(tmp_path: Path) -> None:
         {"output_hash", "grader_version", "model_id", "prompt_version", "latency_ms"} <= row.keys()
         for row in rows
     )
+
+
+def test_release_runner_uses_observed_adapter_output_not_dataset_actual(tmp_path: Path) -> None:
+    class BrokenRuntimeAdapter:
+        model_id = "broken-runtime"
+        prompt_version = "none"
+
+        def evaluate(self, item):
+            if item.suite == "jd":
+                return {
+                    "classification_label": "Project Management",
+                    "scores": [0, 0],
+                    "recommendation": "Skip",
+                    "available_evidence_ids": ["jd-title"],
+                    "evidence_ids": ["jd-title"],
+                }
+            if item.suite == "cv_pair":
+                return {
+                    "source_claim_ids": ["source"],
+                    "output_claim_ids": ["invented"],
+                    "docx_structure_valid": False,
+                }
+            return {"action": "refuse", "write_count": 99}
+
+    result = run_dataset(Path("evals/datasets/v1.jsonl"), tmp_path, adapter=BrokenRuntimeAdapter())
+    rows = [json.loads(line) for line in (tmp_path / "eval-items.jsonl").read_text().splitlines()]
+
+    assert result.passed is False
+    assert result.failed_items > 0
+    assert result.zero_tolerance_failures > 0
+    assert rows[0]["output"]["classification_label"] == "Project Management"
+    assert rows[0]["model_id"] == "broken-runtime"

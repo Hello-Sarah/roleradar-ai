@@ -28,11 +28,15 @@ artifacts/acceptance/<version>/<git-commit>/
 
 `manifest.json` records version, full Git commit, dirty-worktree status, UTC start/end, OS, Python,
 browser versions, model ID, prompt/rubric/dataset versions, command exit codes, and SHA-256 hashes of
-evidence files. A dirty worktree cannot produce release evidence.
+every evidence file. Each command record includes the full HEAD, dirty status, commit time, exact
+canonical command, and exhaustive expected artifact paths captured at execution time. A dirty
+worktree, command substitution, stale or copied command provenance, missing hash, or unexpected
+evidence file cannot produce release evidence.
 
 ## Acceptance record fields
 
-Each acceptance ID records requirement, preconditions, steps, expected result, automated evidence,
+Each acceptance ID in the versioned `spec/acceptance-v1.json` catalog records requirement,
+preconditions, steps, expected result, automated evidence,
 visual evidence when required, actual result, Pass/Fail/Blocked, tested time, environment, commit,
 and linked defect. Blocked is not Pass and prevents release for Must items.
 

@@ -11,8 +11,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.evals.adapters import DeterministicReleaseAdapter, EvalAdapter
 from app.evals.contracts import EvalDataset, EvalItem, load_dataset
 from app.evals.graders import (
+    GRADER_VERSION,
     GraderResult,
     grade_bilingual_parity,
     grade_cv_case,
@@ -34,19 +36,18 @@ class EvalRunResult(BaseModel):
     output_dir: Path
 
 
-def _expected_match(item: EvalItem) -> GraderResult:
+def _expected_match(item: EvalItem, output: dict[str, Any]) -> GraderResult:
     if item.suite == "jd":
         matches = (
-            item.actual.get("classification_label") == item.expected["classification_label"]
-            and item.actual.get("recommendation") == item.expected["recommendation"]
+            output.get("classification_label") == item.expected["classification_label"]
+            and output.get("recommendation") == item.expected["recommendation"]
         )
     else:
-        matches = item.actual.get("action") == item.expected.get("action")
+        matches = output.get("action") == item.expected.get("action")
     return GraderResult(name="expected_label", passed=matches, metrics={"matches": matches})
 
 
-def _grade_item(item: EvalItem) -> list[GraderResult]:
-    output = item.actual
+def _grade_item(item: EvalItem, output: dict[str, Any]) -> list[GraderResult]:
     if item.suite == "jd":
         score_range = tuple(item.expected["score_range"])
         return [
@@ -64,7 +65,7 @@ def _grade_item(item: EvalItem) -> list[GraderResult]:
             grade_evidence_ids(
                 set(output.get("available_evidence_ids", [])), output.get("evidence_ids", [])
             ),
-            _expected_match(item),
+            _expected_match(item, output),
         ]
     if item.suite == "cv_pair":
         factual = grade_cv_case(
@@ -89,7 +90,7 @@ def _grade_item(item: EvalItem) -> list[GraderResult]:
         ]
     return [
         grade_schema(output, required_fields={"action", "write_count"}),
-        _expected_match(item),
+        _expected_match(item, output),
         grade_write_counts(
             actual=output.get("write_count", -1),
             maximum=item.expected["max_writes"],
@@ -117,8 +118,14 @@ def _dataset_hash(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run_dataset(dataset_path: Path, output_dir: Path) -> EvalRunResult:
+def run_dataset(
+    dataset_path: Path,
+    output_dir: Path,
+    *,
+    adapter: EvalAdapter | None = None,
+) -> EvalRunResult:
     dataset: EvalDataset = load_dataset(dataset_path)
+    runtime = adapter or DeterministicReleaseAdapter()
     dataset_hash = _dataset_hash(dataset_path)
     pairs = {item.id: item for item in dataset.items}
     rows: list[dict[str, Any]] = []
@@ -126,17 +133,19 @@ def run_dataset(dataset_path: Path, output_dir: Path) -> EvalRunResult:
     zero_tolerance_failures = 0
     suite_failures: Counter[str] = Counter()
 
+    outputs = {item.id: runtime.evaluate(item) for item in dataset.items}
     for item in dataset.items:
         started = time.perf_counter_ns()
-        results = _grade_item(item)
+        output = outputs[item.id]
+        results = _grade_item(item, output)
         if item.pair_id:
-            results.append(grade_bilingual_parity(item.actual, pairs[item.pair_id].actual))
+            results.append(grade_bilingual_parity(output, outputs[pairs[item.pair_id].id]))
         passed = all(result.passed for result in results)
         zero_failures = sum(result.zero_tolerance_failure for result in results)
         failed += not passed
         zero_tolerance_failures += zero_failures
         suite_failures[item.suite] += not passed
-        safe_output = _safe_output(item.actual)
+        safe_output = _safe_output(output)
         rows.append(
             {
                 "dataset_version": item.dataset_version,
@@ -148,11 +157,11 @@ def run_dataset(dataset_path: Path, output_dir: Path) -> EvalRunResult:
                 "input_hash": canonical_hash(item.input),
                 "expected": item.expected,
                 "output": safe_output,
-                "output_hash": canonical_hash(item.actual),
+                "output_hash": canonical_hash(output),
                 "grader_version": item.grader_version,
                 "grader_results": [result.model_dump(mode="json") for result in results],
-                "model_id": item.model_id,
-                "prompt_version": item.prompt_version,
+                "model_id": runtime.model_id,
+                "prompt_version": runtime.prompt_version,
                 "runner_version": RUNNER_VERSION,
                 "latency_ms": round((time.perf_counter_ns() - started) / 1_000_000, 3),
                 "passed": passed,
@@ -165,6 +174,9 @@ def run_dataset(dataset_path: Path, output_dir: Path) -> EvalRunResult:
         "dataset_version": dataset.version,
         "dataset_hash": dataset_hash,
         "runner_version": RUNNER_VERSION,
+        "grader_version": GRADER_VERSION,
+        "model_id": runtime.model_id,
+        "prompt_version": runtime.prompt_version,
         "item_count": len(dataset.items),
         "suite_counts": dataset.suite_counts,
         "suite_failures": dict(sorted(suite_failures.items())),
