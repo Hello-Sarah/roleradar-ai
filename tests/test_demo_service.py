@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 from pydantic import ValidationError
 
@@ -17,6 +19,14 @@ end-to-end delivery. Lead user discovery, product roadmap prioritization, and it
 
 def _settings() -> Settings:
     return Settings(ai_explanations_enabled=False, openai_api_key=None)
+
+
+def _enabled_settings(**overrides: object) -> Settings:
+    return Settings(
+        ai_explanations_enabled=True,
+        openai_api_key="not-used",
+        **overrides,
+    )
 
 
 @pytest.mark.parametrize("locale", ["en", "zh-Hans"])
@@ -69,7 +79,9 @@ def test_demo_response_has_stable_explainable_schema() -> None:
         "red_flags",
         "green_flags",
         "recommendation",
+        "recommendation_label",
         "next_action",
+        "next_action_label",
         "explanation",
         "explanation_source",
         "profile_version",
@@ -147,7 +159,9 @@ def test_prompt_injection_cannot_override_deterministic_score_or_schema() -> Non
         "red_flags",
         "green_flags",
         "recommendation",
+        "recommendation_label",
         "next_action",
+        "next_action_label",
         "explanation",
         "explanation_source",
         "profile_version",
@@ -193,3 +207,149 @@ def test_explanation_provider_receives_bounded_timeout_without_affecting_score()
     assert explanation.summary.startswith("The deterministic score")
     assert source == "gpt-4.1-mini"
     assert received_timeouts == [2.5]
+
+
+def test_demo_service_passes_configured_timeout_and_falls_back_after_provider_error() -> None:
+    from app.analysis.explainer import LLMExplanation
+    from app.demo.contracts import DemoAnalyzeRequest
+    from app.demo.service import analyze_demo_job
+
+    received_timeouts: list[float | None] = []
+
+    def failing_provider(
+        prompt: dict[str, object], timeout_seconds: float | None
+    ) -> LLMExplanation:
+        del prompt
+        received_timeouts.append(timeout_seconds)
+        raise TimeoutError("provider timed out")
+
+    response = analyze_demo_job(
+        DemoAnalyzeRequest(text=DEMO_JOB, locale="en"),
+        _enabled_settings(demo_provider_timeout_seconds=1.5),
+        provider_call=failing_provider,
+    )
+
+    assert received_timeouts == [1.5]
+    assert response.explanation_source == "deterministic-fallback"
+    assert response.score == sum(item.score for item in response.dimensions.values())
+
+
+def test_demo_service_does_not_publish_enabled_provider_claims_outside_jd_evidence() -> None:
+    from app.analysis.explainer import LLMExplanation
+    from app.demo.contracts import DemoAnalyzeRequest
+    from app.demo.service import analyze_demo_job
+
+    def unsupported_claim_provider(
+        prompt: dict[str, object], timeout_seconds: float | None
+    ) -> LLMExplanation:
+        del prompt, timeout_seconds
+        return LLMExplanation(
+            strengths=["Won a Nobel Prize"],
+            gaps=["None"],
+            evidence=["jd-title: Applied AI Engineer"],
+            summary="The candidate won a Nobel Prize, which makes this role an ideal match.",
+        )
+
+    response = analyze_demo_job(
+        DemoAnalyzeRequest(text=DEMO_JOB, locale="en"),
+        _enabled_settings(),
+        provider_call=unsupported_claim_provider,
+    )
+
+    assert response.explanation_source == "gpt-4.1-mini"
+    assert "nobel" not in response.explanation.casefold()
+    assert all("nobel" not in item.casefold() for item in response.strengths)
+
+
+def test_demo_service_falls_back_when_provider_cites_unsupported_jd_evidence() -> None:
+    from app.analysis.explainer import LLMExplanation
+    from app.demo.contracts import DemoAnalyzeRequest
+    from app.demo.service import analyze_demo_job
+
+    def invalid_evidence_provider(
+        prompt: dict[str, object], timeout_seconds: float | None
+    ) -> LLMExplanation:
+        del prompt, timeout_seconds
+        return LLMExplanation(
+            strengths=["SUPPORTED_STRENGTH"],
+            gaps=["SUPPORTED_GAP"],
+            evidence=["jd-001: invented evidence"],
+            summary="This explanation should not be accepted without exact JD evidence.",
+        )
+
+    response = analyze_demo_job(
+        DemoAnalyzeRequest(text=DEMO_JOB, locale="en"),
+        _enabled_settings(),
+        provider_call=invalid_evidence_provider,
+    )
+
+    assert response.explanation_source == "deterministic-fallback"
+
+
+def test_provider_exception_cannot_log_job_description(caplog: pytest.LogCaptureFixture) -> None:
+    from app.analysis.classifier import classify_job
+    from app.analysis.explainer import LLMExplanation, explain_fit
+    from app.demo.profile import public_demo_profile
+    from app.ingestion.text_extractor import extract_job_from_text
+    from app.scoring.v2 import JobEvidence, ProfileEvidence, score_job_v2
+
+    secret_job_text = DEMO_JOB.replace(
+        "enterprise financial-services customers", "JD-SECRET-SENTINEL"
+    )
+    job = extract_job_from_text(secret_job_text)
+    profile = public_demo_profile()
+    result = score_job_v2(
+        JobEvidence(title=job.title, description=job.description),
+        ProfileEvidence(target_roles=profile.target_roles),
+    )
+
+    def leaking_provider(
+        prompt: dict[str, object], timeout_seconds: float | None
+    ) -> LLMExplanation:
+        del timeout_seconds
+        raise RuntimeError(str(prompt["job"]["description"]))
+
+    with caplog.at_level(logging.ERROR, logger="app.analysis.explainer"):
+        explanation, source = explain_fit(
+            job=job,
+            profile=profile,
+            classification=classify_job(job.title, job.description),
+            result=result,
+            settings=_enabled_settings(),
+            provider_call=leaking_provider,
+            timeout_seconds=1.0,
+        )
+
+    assert source == "deterministic-fallback"
+    assert explanation.summary
+    assert "JD-SECRET-SENTINEL" not in caplog.text
+
+
+def test_demo_localizes_presentation_without_changing_machine_values() -> None:
+    from app.demo.contracts import DemoAnalyzeRequest
+    from app.demo.service import analyze_demo_job
+
+    english = analyze_demo_job(DemoAnalyzeRequest(text=DEMO_JOB, locale="en"), _settings())
+    chinese = analyze_demo_job(DemoAnalyzeRequest(text=DEMO_JOB, locale="zh-Hans"), _settings())
+
+    assert chinese.recommendation == english.recommendation
+    assert chinese.next_action == english.next_action
+    assert chinese.recommendation_label != english.recommendation_label
+    assert chinese.next_action_label != english.next_action_label
+    assert "确定性" in chinese.explanation
+
+
+def test_demo_service_enforces_configured_text_limit() -> None:
+    from app.demo.contracts import DemoAnalyzeRequest
+    from app.demo.service import analyze_demo_job
+
+    payload = DemoAnalyzeRequest(text=DEMO_JOB, locale="en")
+
+    with pytest.raises(ValueError, match="configured demo limit"):
+        analyze_demo_job(
+            payload,
+            Settings(
+                ai_explanations_enabled=False,
+                demo_max_characters=len(DEMO_JOB) - 1,
+            ),
+        )

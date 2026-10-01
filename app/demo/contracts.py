@@ -6,13 +6,19 @@ from app.analysis.explainer import LLMExplanation
 from app.schemas import ClassificationRead, JobCreate, Locale
 from app.scoring.v2 import DimensionScore, EvidenceFlag, EvidenceItem
 
+ABSOLUTE_DEMO_MAX_CHARACTERS = 100_000
+
+
+class DemoInputLimitError(ValueError):
+    """Raised when a valid payload exceeds the deployment's public-demo limit."""
+
 
 class DemoAnalyzeRequest(BaseModel):
     """A bounded, untrusted job-description payload for one demo request."""
 
     model_config = ConfigDict(extra="forbid")
 
-    text: str = Field(min_length=40, max_length=100_000)
+    text: str = Field(min_length=40, max_length=ABSOLUTE_DEMO_MAX_CHARACTERS)
     locale: Locale
 
 
@@ -32,7 +38,9 @@ class DemoAnalysisResponse(BaseModel):
     red_flags: list[EvidenceFlag]
     green_flags: list[EvidenceFlag]
     recommendation: str
+    recommendation_label: str
     next_action: str
+    next_action_label: str
     explanation: str
     explanation_source: str
     profile_version: str
@@ -51,7 +59,9 @@ class DemoAnalysisResponse(BaseModel):
         red_flags: list[EvidenceFlag],
         green_flags: list[EvidenceFlag],
         recommendation: str,
+        recommendation_label: str,
         next_action: str,
+        next_action_label: str,
         explanation: LLMExplanation,
         explanation_source: str,
         profile_version: str,
@@ -69,7 +79,9 @@ class DemoAnalysisResponse(BaseModel):
             red_flags=red_flags,
             green_flags=green_flags,
             recommendation=recommendation,
+            recommendation_label=recommendation_label,
             next_action=next_action,
+            next_action_label=next_action_label,
             explanation=explanation.summary,
             explanation_source=explanation_source,
             profile_version=profile_version,

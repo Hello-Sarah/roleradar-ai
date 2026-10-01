@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     openai_base_url: str | None = None
     openai_model: str = "gpt-4.1-mini"
     ai_explanations_enabled: bool = True
+    demo_max_characters: int = Field(default=100_000, ge=40, le=100_000)
+    demo_provider_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     api_base_url: str = "http://localhost:8000"
     log_level: str = "INFO"
     cv_library_path: str = "./data/cv_library"

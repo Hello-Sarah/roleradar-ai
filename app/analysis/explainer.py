@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings
 from app.schemas import CandidateProfileRead, ClassificationRead, JobCreate
-from app.scoring.v2 import CareerFitV2
+from app.scoring.v2 import CareerFitV2, EvidenceItem
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,7 @@ def explain_fit(
     settings: Settings,
     provider_call: ExplanationProvider | None = None,
     timeout_seconds: float | None = None,
+    allowed_evidence: list[EvidenceItem] | None = None,
 ) -> tuple[LLMExplanation, str]:
     if not settings.ai_explanations_enabled or not settings.openai_api_key:
         return _fallback_summary(job, result), "deterministic-fallback"
@@ -83,25 +84,31 @@ def explain_fit(
     }
     try:
         if provider_call is not None:
-            return provider_call(prompt, timeout_seconds), settings.openai_model
-        client_options: dict[str, object] = {
-            "api_key": settings.openai_api_key,
-            "base_url": settings.openai_base_url,
-        }
-        if timeout_seconds is not None:
-            client_options["timeout"] = timeout_seconds
-        client = OpenAI(**client_options)
-        response = client.responses.parse(
-            model=settings.openai_model,
-            input=[
-                {"role": "system", "content": "You are a careful career intelligence analyst."},
-                {"role": "user", "content": str(prompt)},
-            ],
-            text_format=LLMExplanation,
-        )
-        if response.output_parsed is None:
-            raise ValueError("Model returned no structured explanation")
-        return response.output_parsed, settings.openai_model
+            explanation = provider_call(prompt, timeout_seconds)
+        else:
+            client_options: dict[str, object] = {
+                "api_key": settings.openai_api_key,
+                "base_url": settings.openai_base_url,
+            }
+            if timeout_seconds is not None:
+                client_options["timeout"] = timeout_seconds
+            client = OpenAI(**client_options)
+            response = client.responses.parse(
+                model=settings.openai_model,
+                input=[
+                    {"role": "system", "content": "You are a careful career intelligence analyst."},
+                    {"role": "user", "content": str(prompt)},
+                ],
+                text_format=LLMExplanation,
+            )
+            if response.output_parsed is None:
+                raise ValueError("Model returned no structured explanation")
+            explanation = response.output_parsed
+        if allowed_evidence is not None:
+            allowed_items = {f"{item.id}: {item.text}" for item in allowed_evidence}
+            if not explanation.evidence or not set(explanation.evidence) <= allowed_items:
+                raise ValueError("Model explanation cited unsupported JD evidence")
+        return explanation, settings.openai_model
     except Exception:
-        logger.exception("AI explanation failed; using deterministic fallback")
+        logger.error("AI explanation provider failed; using deterministic fallback")
         return _fallback_summary(job, result), "deterministic-fallback"
