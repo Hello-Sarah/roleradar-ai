@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+LOCAL_ACCOUNT_PATH = "/Users/" + "shen"
 
 
 def scan_tracked_public_risks(repo_root: Path) -> list[str]:
@@ -36,9 +37,9 @@ def scan_tracked_public_risks(repo_root: Path) -> list[str]:
         ):
             risks.append(f"private runtime artifact is tracked: {tracked_path}")
 
-        if tracked_path.endswith(".md") and not tracked_path.startswith("docs/superpowers/"):
+        if tracked_path.endswith(".md"):
             document = repo_root / tracked_path
-            if "/Users/shen" in document.read_text(encoding="utf-8"):
+            if LOCAL_ACCOUNT_PATH in document.read_text(encoding="utf-8"):
                 risks.append(f"absolute user path is tracked: {tracked_path}")
 
     return risks

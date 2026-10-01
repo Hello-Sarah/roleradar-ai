@@ -76,7 +76,7 @@ Docker, GitHub Actions, GitHub Pages.
   `test_tracked_docs_exclude_absolute_user_paths`, and
   `test_readme_declares_demo_privacy_and_current_limits`. Assert that tracked paths exclude `.env`,
   databases, CV inputs/outputs, private evidence, and `.superpowers`; tracked text excludes
-  `/Users/shen`; README contains the zero-persistence statement and does not claim a built Eval
+  a user-specific absolute local path; README contains the zero-persistence statement and does not claim a built Eval
   Harness.
 
 - [ ] **Step 2: Verify RED**
