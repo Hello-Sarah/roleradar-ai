@@ -1,6 +1,6 @@
 # RoleRadar AI — Engineering Handoff
 
-Last updated: 2026-09-30
+Last updated: 2026-10-01
 
 This is the recovery document for the active V1 implementation plan. It records what is safe,
 what is still under review, what failed previously, and the exact checks required before work is
@@ -13,6 +13,7 @@ artifacts remain in `.superpowers/sdd/2026-08-25-role-radar-v1/`.
 - Active branch: `codex/roleradar-v1`
 - Persistent worktree: `/Users/shen/Documents/FDE Career Intelligence Agent/.worktrees/roleradar-v1`
 - Independently verified Task 7 remote head: `806fc31`
+- Independently verified Task 8 remote head: `ce268b3`
 - Accepted Task 6 implementation and fix head: `128b4f9`
 - Stable demo through accepted Task 5: `f70f979`
 - Implementation plan: `docs/superpowers/plans/2026-08-25-role-radar-v1.md`
@@ -128,6 +129,108 @@ Two durable lessons from Task 8 are: reminder state belongs to the newest applic
 newer event with no follow-up date must resolve an older reminder; and downstream decision surfaces
 must consume the stored version/band rather than silently reconstructing a score boundary.
 
+Task 8 was subsequently independently verified locally and merged into
+`origin/codex/roleradar-v1` at `ce268b3`: 265 tests passed with 85% total coverage, and Ruff and
+Alembic checks were clean. This execution environment contains the equivalent merged Task 8 tree as
+its base commit `ebab794`; fetching `ce268b3` was attempted first but the environment's GitHub proxy
+returned HTTP 403, so no history was rewritten or existing work discarded.
+
+## Completed implementation: Task 9
+
+Task 9 adds the runnable, versioned V1 Eval harness and initial synthetic Golden Dataset:
+
+- `python -m app.evals.runner --dataset PATH --output DIR` validates and grades JSONL, then emits
+  privacy-safe `eval-summary.json` and `eval-items.jsonl` reports.
+- Deterministic graders cover schema fields, repeat-score stability and accepted range, evidence-ID
+  validity, database write counts, bilingual parity, CV claim support, and DOCX package structure.
+- Unsupported CV claims, invalid evidence, unauthorized writes, and invalid DOCX structure are
+  zero-tolerance failures. A high composite or future model-based clarity score cannot override one.
+- Dataset validation enforces unique IDs, per-suite labels and score ranges, synthetic/redaction
+  markers, suite minimum counts, mutual cross-locale pair references, 20–30 user-review JD labels,
+  and rejection of private-looking emails or phone numbers.
+- The committed `v1.jsonl` contains 60 JD, 20 CV-to-JD, 30 normal Copilot, and 20 adversarial cases.
+  It includes mutual Chinese/English release-critical pairs and marks 25 subjective JD preference
+  cases `user_review_required` without treating those labels as final.
+- Item reports preserve dataset/item identity, input/output hashes, safe structured output, expected
+  labels/ranges, grader results/version, model ID, prompt version, runner version, and latency. Input
+  text is never copied into reports.
+
+Task 9 followed red → green TDD. The first focused invocation failed because the new Eval modules
+did not exist; after implementation, parity and raw bilingual-reference failures were also observed
+and corrected before the final green run. Evidence:
+
+```text
+python -m pytest -q -o addopts='' --noconftest tests/test_eval_graders.py tests/test_eval_runner.py
+7 passed
+
+python -m app.evals.runner --dataset evals/datasets/v1.jsonl --output /tmp/roleradar-evals
+passed=true; item_count=130; failed_items=0; zero_tolerance_failures=0
+
+ruff check .
+All checks passed!
+
+ruff format --check .
+98 files already formatted
+
+alembic heads
+20260825_05 (head)
+
+git diff --check
+clean
+```
+
+The normal focused and full pytest commands were attempted first, but this container is missing the
+declared `python-docx`, `pypdf`, and `pytest-cov` packages. Collection stops in the existing global
+`tests/conftest.py` when `app.services.cv_service` imports `docx`; network and apt installation both
+failed. `--noconftest` was therefore used only for the self-contained Eval tests. A provisioned
+project environment must rerun plain focused pytest and the full suite before independent acceptance.
+
+Durable lessons: validate privacy before Pydantic normalization so even malformed items cannot hide
+private data; make bilingual links mutual rather than accepting one-way references; and record safe
+structured output plus its full hash instead of copying unbounded provider text into release reports.
+
+### Task 9 independent-review follow-up
+
+Independent review found an Important parity gap: the grader compared legacy `score` and `class`
+keys, while committed JD outputs use `scores`, `classification_label`, `recommendation`,
+`available_evidence_ids`, and `evidence_ids`. A Chinese result could therefore disagree on its class,
+recommendation, or repeated scores while the parity grade still passed. Regression tests first
+reproduced all three false passes and a Copilot `write_count` false pass.
+
+The parity grader is now contract-aware. It compares the five structured JD decision fields, the
+Copilot `action` and `write_count` fields, or the three structured CV artifact fields, depending on
+the paired output schema. Locale-specific prose is deliberately excluded. Tests also load a real
+release-critical English/Chinese pair from the committed dataset and require it to pass. The Ruff
+Markdown formatter was applied to the implementation plan to fix the independent CI format failure.
+
+Follow-up verification:
+
+```text
+python -m pytest -q -o addopts='' --noconftest tests/test_eval_graders.py tests/test_eval_runner.py
+12 passed
+
+python -m app.evals.runner --dataset evals/datasets/v1.jsonl --output /tmp/roleradar-evals
+passed=true; item_count=130; failed_items=0; zero_tolerance_failures=0
+
+ruff check .
+All checks passed!
+
+ruff format --check .
+98 files already formatted
+
+ruff format --preview --check docs/superpowers/plans/2026-08-25-role-radar-v1.md
+1 file already formatted
+
+alembic heads
+20260825_05 (head)
+
+git diff --check
+clean
+```
+
+Lesson: bilingual parity fields must be derived from the versioned output contract, not from legacy
+or display-oriented names; write-count parity is part of Copilot safety, not merely an output detail.
+
 ## Completed review: Task 6
 
 Task 6 adds persisted Career Copilot conversations, typed action proposals, mandatory confirmation,
@@ -149,7 +252,6 @@ Important breakage. The implementer reported 31 focused and 189 full tests passi
 
 ## Remaining plan
 
-- Task 9: runnable versioned Eval harness and synthetic/redacted Golden Dataset.
 - Task 10: browser, accessibility, and immutable acceptance-evidence automation.
 - Task 11: release documentation, final acceptance, and portfolio handoff.
 
@@ -238,8 +340,8 @@ findings. Then update both the SDD ledger and this document, create a normal com
 1. Open this file and `.superpowers/sdd/2026-08-25-role-radar-v1/progress.md`.
 2. Confirm the active worktree, branch, `git status`, local HEAD, and remote branch hash.
 3. Do not re-dispatch Tasks 1–5; they are already accepted.
-4. Do not resume Tasks 1–8. Task 9, the versioned Eval runner and Golden Dataset, is the next
-   incomplete item in the approved V1 implementation plan; do not start it without explicit scope.
-5. Never claim Task 9's Eval harness is built until its runner, dataset, graders, CI checks, and
-   fresh evidence report exist and pass.
+4. Do not resume Tasks 1–9. Task 10, browser/accessibility and immutable acceptance-evidence
+   automation, is the next incomplete item; do not start it without explicit scope.
+5. Do not treat Task 9 as independently accepted until plain focused/full pytest pass in the
+   provisioned project environment and the exact Task 9 diff receives review.
 6. After each accepted task, update this handoff, push GitHub, and verify the remote commit hash.
