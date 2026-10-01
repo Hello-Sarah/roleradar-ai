@@ -224,6 +224,8 @@
   "cv.source_files_read_only": "原始文件保持只读，并排除在 Git 之外。",
   "cv.target_job": "目标职位",
   "dashboard.follow_ups_due": "到期跟进",
+  "dashboard.follow_up_due": "今日到期",
+  "dashboard.follow_up_overdue": "已逾期",
   "dashboard.view_records": "查看记录",
   "dashboard.jobs_count": "职位数",
   "jobs.active_filter": "正在显示：{filter_value}",
