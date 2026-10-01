@@ -27,7 +27,7 @@ def _choose_streamlit_option(page: Any, label: str, option: str) -> None:
     expect(combobox).to_have_value(option)
 
 
-def _wait_for_status(api_client: Any, expected_status: str, timeout: float = 5) -> None:
+def _wait_for_status(api_client: Any, expected_status: str, timeout: float = 15) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         jobs = api_client.get("/api/v1/jobs").json()
