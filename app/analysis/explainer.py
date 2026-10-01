@@ -92,6 +92,12 @@ def _fallback_summary(job: JobCreate, result: CareerFitV2) -> LLMExplanation:
     )
 
 
+def deterministic_fallback_explanation(job: JobCreate, result: CareerFitV2) -> LLMExplanation:
+    """Build the validated deterministic explanation used after provider failures."""
+
+    return _fallback_summary(job, result)
+
+
 def _validate_public_selections(
     explanation: ExplanationResult, allowed_evidence: list[EvidenceItem]
 ) -> None:
@@ -115,7 +121,7 @@ def explain_fit(
     locale: str | None = None,
 ) -> tuple[ExplanationResult, str]:
     if not settings.ai_explanations_enabled or not settings.openai_api_key:
-        return _fallback_summary(job, result), "deterministic-fallback"
+        return deterministic_fallback_explanation(job, result), "deterministic-fallback"
 
     prompt = {
         "instruction": (
@@ -176,4 +182,4 @@ def explain_fit(
         return explanation, settings.openai_model
     except Exception:
         logger.error("AI explanation provider failed; using deterministic fallback")
-        return _fallback_summary(job, result), "deterministic-fallback"
+        return deterministic_fallback_explanation(job, result), "deterministic-fallback"

@@ -1,11 +1,14 @@
 """Stateless orchestration for one public job-analysis request."""
 
+from pydantic import ValidationError
+
 from app.analysis.classifier import classify_job
 from app.analysis.explainer import (
     EvidenceGroundedClaim,
     EvidenceSelection,
     ExplanationProvider,
     LLMExplanation,
+    deterministic_fallback_explanation,
     explain_fit,
 )
 from app.config import Settings
@@ -119,6 +122,32 @@ def _model_selection_explanation(
     )
 
 
+def _localized_fallback_explanation(
+    *,
+    explanation: LLMExplanation,
+    locale: str,
+    score: int,
+    recommendation_label: str,
+) -> LLMExplanation:
+    summary_claim = explanation.summary_claim
+    if summary_claim is None:
+        raise ValueError("Deterministic explanation must include evidence-grounded summary")
+    localized_summary = _localized_explanation(
+        locale=locale,
+        score=score,
+        recommendation_label=recommendation_label,
+    )
+    return explanation.model_copy(
+        update={
+            "summary": localized_summary,
+            "summary_claim": EvidenceGroundedClaim(
+                text=localized_summary,
+                evidence_ids=summary_claim.evidence_ids,
+            ),
+        }
+    )
+
+
 def analyze_demo_job(
     payload: DemoAnalyzeRequest,
     settings: Settings,
@@ -154,30 +183,28 @@ def analyze_demo_job(
     recommendation_label = _RECOMMENDATION_LABELS[payload.locale][score.recommendation_band]
     next_action_label = _NEXT_ACTION_LABELS[payload.locale][score.recommended_next_action]
     if explanation_source == "deterministic-fallback":
-        summary_claim = explanation.summary_claim
-        if summary_claim is None:
-            raise ValueError("Deterministic explanation must include evidence-grounded summary")
-        localized_summary = _localized_explanation(
+        explanation = _localized_fallback_explanation(
+            explanation=explanation,
             locale=payload.locale,
             score=score.total_score,
             recommendation_label=recommendation_label,
         )
-        explanation = explanation.model_copy(
-            update={
-                "summary": localized_summary,
-                "summary_claim": EvidenceGroundedClaim(
-                    text=localized_summary,
-                    evidence_ids=summary_claim.evidence_ids,
-                ),
-            }
-        )
     else:
-        explanation = _model_selection_explanation(
-            selections=explanation.selections,
-            evidence=score.evidence,
-            locale=payload.locale,
-        )
-        explanation_source = "model-assisted-evidence-selection"
+        try:
+            explanation = _model_selection_explanation(
+                selections=explanation.selections,
+                evidence=score.evidence,
+                locale=payload.locale,
+            )
+            explanation_source = "model-assisted-evidence-selection"
+        except ValidationError:
+            explanation = _localized_fallback_explanation(
+                explanation=deterministic_fallback_explanation(job, score),
+                locale=payload.locale,
+                score=score.total_score,
+                recommendation_label=recommendation_label,
+            )
+            explanation_source = "deterministic-fallback"
     return DemoAnalysisResponse.from_explanation(
         job=job,
         classification=classification,

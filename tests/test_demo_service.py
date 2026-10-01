@@ -298,6 +298,44 @@ def test_demo_service_publishes_canonical_text_for_valid_model_evidence_selectio
     assert response.explanation.evidence_ids == ["jd-004"]
 
 
+def test_demo_service_falls_back_when_selected_canonical_evidence_exceeds_claim_limit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.analysis.explainer import PublicEvidenceSelections
+    from app.demo.contracts import DemoAnalyzeRequest
+    from app.demo.service import analyze_demo_job
+
+    long_evidence = "JD-LONG-SENTINEL " + ("secure enterprise integration " * 36)
+    job_text = (
+        "Company: Example Financial\n"
+        "Job Title: Applied AI Engineer\n"
+        "Location: Singapore\n"
+        f"{long_evidence}\n"
+    )
+
+    def long_evidence_provider(
+        prompt: dict[str, object], timeout_seconds: float | None
+    ) -> PublicEvidenceSelections:
+        del timeout_seconds
+        evidence_catalog = prompt["evidence_catalog"]
+        assert isinstance(evidence_catalog, list)
+        assert len(evidence_catalog[4]["text"]) > 500
+        return PublicEvidenceSelections(
+            selections=[{"evidence_id": "jd-004", "label": "summary"}],
+        )
+
+    with caplog.at_level(logging.ERROR):
+        response = analyze_demo_job(
+            DemoAnalyzeRequest(text=job_text, locale="en"),
+            _enabled_settings(),
+            provider_call=long_evidence_provider,
+        )
+
+    assert response.explanation_source == "deterministic-fallback"
+    assert response.score == sum(item.score for item in response.dimensions.values())
+    assert "JD-LONG-SENTINEL" not in caplog.text
+
+
 @pytest.mark.parametrize("locale", ["en", "zh-Hans"])
 def test_demo_service_never_publishes_fabricated_provider_prose_with_valid_evidence_id(
     locale: str,
