@@ -1,7 +1,9 @@
 import copy
 import hashlib
 import json
+import os
 import subprocess
+import sys
 import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -549,6 +551,20 @@ def test_release_gate_rejects_trusted_basename_from_untrusted_path(
 
     assert result.release_ready is False
     assert f"untrusted executable: {command_name}" in result.errors
+
+
+def test_release_gate_normalizes_the_approved_virtualenv_python_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    eval_command = next(item for item in manifest["commands"] if item["name"] == "eval")
+    virtualenv_bin = Path(sys.executable).parent
+    monkeypatch.setenv("PATH", f"{virtualenv_bin}:{os.environ['PATH']}")
+    eval_command["executable"] = executable_identity("python", name="eval")
+
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+
+    assert result.release_ready is True
 
 
 def test_acceptance_results_derive_status_from_criterion_specific_evidence(
