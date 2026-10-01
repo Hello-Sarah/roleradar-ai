@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Callable, Iterable
+from typing import Literal
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -10,8 +11,6 @@ from app.scoring.v2 import CareerFitV2, EvidenceItem
 
 logger = logging.getLogger(__name__)
 
-ExplanationProvider = Callable[[dict[str, object], float | None], "LLMExplanation"]
-
 
 class LLMExplanation(BaseModel):
     strengths: list[str] = Field(min_length=1, max_length=6)
@@ -21,6 +20,7 @@ class LLMExplanation(BaseModel):
     strength_claims: list["EvidenceGroundedClaim"] = Field(default_factory=list, max_length=6)
     gap_claims: list["EvidenceGroundedClaim"] = Field(default_factory=list, max_length=6)
     summary_claim: "EvidenceGroundedClaim | None" = None
+    selections: list["EvidenceSelection"] = Field(default_factory=list, max_length=6)
 
 
 class EvidenceGroundedClaim(BaseModel):
@@ -28,6 +28,25 @@ class EvidenceGroundedClaim(BaseModel):
 
     text: str = Field(min_length=1, max_length=500)
     evidence_ids: list[str] = Field(min_length=1, max_length=6)
+
+
+class EvidenceSelection(BaseModel):
+    """A bounded public-demo model choice over the deterministic evidence catalog."""
+
+    evidence_id: str = Field(min_length=1)
+    label: Literal["strength", "gap", "summary"]
+
+
+class PublicEvidenceSelections(BaseModel):
+    """The only model-controlled public-demo output: catalog IDs plus bounded labels."""
+
+    selections: list[EvidenceSelection] = Field(min_length=1, max_length=6)
+
+
+LLMExplanation.model_rebuild()
+
+ExplanationResult = LLMExplanation | PublicEvidenceSelections
+ExplanationProvider = Callable[[dict[str, object], float | None], ExplanationResult]
 
 
 def _bounded_items(items: Iterable[str], fallback: str) -> list[str]:
@@ -73,36 +92,14 @@ def _fallback_summary(job: JobCreate, result: CareerFitV2) -> LLMExplanation:
     )
 
 
-def _validate_public_claims(
-    explanation: LLMExplanation, allowed_evidence: list[EvidenceItem]
+def _validate_public_selections(
+    explanation: ExplanationResult, allowed_evidence: list[EvidenceItem]
 ) -> None:
     allowed_ids = {item.id for item in allowed_evidence}
-    if not explanation.evidence or not set(explanation.evidence) <= allowed_ids:
-        raise ValueError("Model explanation cited unsupported JD evidence")
-    if (
-        len(explanation.strength_claims) != len(explanation.strengths)
-        or len(explanation.gap_claims) != len(explanation.gaps)
-        or explanation.summary_claim is None
-        or explanation.summary_claim.text != explanation.summary
+    if not explanation.selections or any(
+        selection.evidence_id not in allowed_ids for selection in explanation.selections
     ):
-        raise ValueError("Model explanation is missing evidence-grounded public claims")
-
-    claims = [
-        *explanation.strength_claims,
-        *explanation.gap_claims,
-        explanation.summary_claim,
-    ]
-    if any(
-        claim.text != expected
-        or not set(claim.evidence_ids) <= allowed_ids
-        or not set(claim.evidence_ids) <= set(explanation.evidence)
-        for claim, expected in [
-            *zip(explanation.strength_claims, explanation.strengths, strict=True),
-            *zip(explanation.gap_claims, explanation.gaps, strict=True),
-            (explanation.summary_claim, explanation.summary),
-        ]
-    ) or any(not claim.evidence_ids for claim in claims):
-        raise ValueError("Model explanation contains an unsupported public claim")
+        raise ValueError("Model explanation selected unsupported JD evidence")
 
 
 def explain_fit(
@@ -116,7 +113,7 @@ def explain_fit(
     timeout_seconds: float | None = None,
     allowed_evidence: list[EvidenceItem] | None = None,
     locale: str | None = None,
-) -> tuple[LLMExplanation, str]:
+) -> tuple[ExplanationResult, str]:
     if not settings.ai_explanations_enabled or not settings.openai_api_key:
         return _fallback_summary(job, result), "deterministic-fallback"
 
@@ -145,10 +142,9 @@ def explain_fit(
     if allowed_evidence is not None:
         prompt["evidence_catalog"] = [item.model_dump(mode="json") for item in allowed_evidence]
         prompt["public_claim_contract"] = (
-            "For every strength, gap, and summary, return a matching claim object with identical "
-            "text and one or more evidence_ids from evidence_catalog. Return evidence as the cited "
-            "evidence IDs only. Do not make a claim without a cited evidence ID. Write every "
-            "claim in presentation_locale."
+            "Return one to six selections only: each must contain an evidence_id from "
+            "evidence_catalog and one bounded label: strength, gap, or summary. The public "
+            "service ignores free-form provider prose and renders the selected canonical evidence."
         )
         prompt["presentation_locale"] = locale or "en"
     try:
@@ -168,13 +164,15 @@ def explain_fit(
                     {"role": "system", "content": "You are a careful career intelligence analyst."},
                     {"role": "user", "content": str(prompt)},
                 ],
-                text_format=LLMExplanation,
+                text_format=(
+                    PublicEvidenceSelections if allowed_evidence is not None else LLMExplanation
+                ),
             )
             if response.output_parsed is None:
                 raise ValueError("Model returned no structured explanation")
             explanation = response.output_parsed
         if allowed_evidence is not None:
-            _validate_public_claims(explanation, allowed_evidence)
+            _validate_public_selections(explanation, allowed_evidence)
         return explanation, settings.openai_model
     except Exception:
         logger.error("AI explanation provider failed; using deterministic fallback")

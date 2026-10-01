@@ -1,12 +1,18 @@
 """Stateless orchestration for one public job-analysis request."""
 
 from app.analysis.classifier import classify_job
-from app.analysis.explainer import EvidenceGroundedClaim, ExplanationProvider, explain_fit
+from app.analysis.explainer import (
+    EvidenceGroundedClaim,
+    EvidenceSelection,
+    ExplanationProvider,
+    LLMExplanation,
+    explain_fit,
+)
 from app.config import Settings
 from app.demo.contracts import DemoAnalysisResponse, DemoAnalyzeRequest, DemoInputLimitError
 from app.demo.profile import PUBLIC_DEMO_PROFILE_VERSION, public_demo_profile
 from app.ingestion.text_extractor import extract_job_from_text
-from app.scoring.v2 import JobEvidence, ProfileEvidence, score_job_v2
+from app.scoring.v2 import EvidenceItem, JobEvidence, ProfileEvidence, score_job_v2
 
 _RECOMMENDATION_LABELS = {
     "en": {
@@ -56,6 +62,60 @@ def _localized_explanation(*, locale: str, score: int, recommendation_label: str
     return (
         f"Deterministic Career Fit V2 score: {score}/100. Recommendation: {recommendation_label}. "
         "This result is calculated only from the six scoring dimensions and cited JD evidence."
+    )
+
+
+def _model_selection_explanation(
+    *, selections: list[EvidenceSelection], evidence: list[EvidenceItem], locale: str
+) -> LLMExplanation:
+    evidence_by_id = {item.id: item for item in evidence}
+
+    def claim(selection: EvidenceSelection) -> EvidenceGroundedClaim:
+        item = evidence_by_id[selection.evidence_id]
+        label = {
+            "en": {
+                "strength": "Strength evidence",
+                "gap": "Gap evidence to validate",
+            },
+            "zh-Hans": {
+                "strength": "优势证据",
+                "gap": "待验证缺口证据",
+            },
+        }[locale][selection.label]
+        return EvidenceGroundedClaim(text=f"{label}: {item.text}", evidence_ids=[item.id])
+
+    strength_claims = [claim(item) for item in selections if item.label == "strength"]
+    gap_claims = [claim(item) for item in selections if item.label == "gap"]
+    summary_items = [item for item in selections if item.label == "summary"] or selections
+    summary_evidence_ids = list(dict.fromkeys(item.evidence_id for item in summary_items))
+    summary_text = {
+        "en": "Model-selected JD evidence: ",
+        "zh-Hans": "模型选择的职位描述证据：",
+    }[locale] + " ".join(evidence_by_id[item_id].text for item_id in summary_evidence_ids)
+    return LLMExplanation(
+        strengths=[item.text for item in strength_claims] or ["NO_MODEL_SELECTED_STRENGTHS"],
+        gaps=[item.text for item in gap_claims] or ["NO_MODEL_SELECTED_GAPS"],
+        evidence=summary_evidence_ids,
+        summary=summary_text,
+        strength_claims=strength_claims
+        or [
+            EvidenceGroundedClaim(
+                text="NO_MODEL_SELECTED_STRENGTHS",
+                evidence_ids=summary_evidence_ids,
+            )
+        ],
+        gap_claims=gap_claims
+        or [
+            EvidenceGroundedClaim(
+                text="NO_MODEL_SELECTED_GAPS",
+                evidence_ids=summary_evidence_ids,
+            )
+        ],
+        summary_claim=EvidenceGroundedClaim(
+            text=summary_text,
+            evidence_ids=summary_evidence_ids,
+        ),
+        selections=selections,
     )
 
 
@@ -111,6 +171,13 @@ def analyze_demo_job(
                 ),
             }
         )
+    else:
+        explanation = _model_selection_explanation(
+            selections=explanation.selections,
+            evidence=score.evidence,
+            locale=payload.locale,
+        )
+        explanation_source = "model-assisted-evidence-selection"
     return DemoAnalysisResponse.from_explanation(
         job=job,
         classification=classification,

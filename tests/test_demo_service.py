@@ -261,46 +261,25 @@ def test_demo_service_does_not_publish_enabled_provider_claims_outside_jd_eviden
     assert all("nobel" not in item.text.casefold() for item in response.strengths)
 
 
-def test_demo_service_publishes_provider_prose_only_with_validated_evidence_claims() -> None:
-    from app.analysis.explainer import LLMExplanation
+def test_demo_service_publishes_canonical_text_for_valid_model_evidence_selection() -> None:
+    from app.analysis.explainer import PublicEvidenceSelections
     from app.demo.contracts import DemoAnalyzeRequest
     from app.demo.service import analyze_demo_job
 
     def grounded_provider(
         prompt: dict[str, object], timeout_seconds: float | None
-    ) -> LLMExplanation:
+    ) -> PublicEvidenceSelections:
         del timeout_seconds
         assert prompt["evidence_catalog"][0] == {
             "id": "jd-title",
             "text": "Applied AI Engineer",
         }
         assert {item["id"] for item in prompt["evidence_catalog"]} >= {"jd-title", "jd-004"}
-        return LLMExplanation(
-            strengths=["Applied AI Engineer"],
-            gaps=[
-                "Build AI agents and RAG prototypes for enterprise financial-services customers."
+        return PublicEvidenceSelections(
+            selections=[
+                {"evidence_id": "jd-title", "label": "strength"},
+                {"evidence_id": "jd-004", "label": "summary"},
             ],
-            evidence=["jd-title", "jd-004"],
-            summary=(
-                "The role is an Applied AI Engineer opportunity with grounded delivery evidence."
-            ),
-            strength_claims=[{"text": "Applied AI Engineer", "evidence_ids": ["jd-title"]}],
-            gap_claims=[
-                {
-                    "text": (
-                        "Build AI agents and RAG prototypes for enterprise financial-services "
-                        "customers."
-                    ),
-                    "evidence_ids": ["jd-004"],
-                }
-            ],
-            summary_claim={
-                "text": (
-                    "The role is an Applied AI Engineer opportunity with grounded delivery "
-                    "evidence."
-                ),
-                "evidence_ids": ["jd-title", "jd-004"],
-            },
         )
 
     response = analyze_demo_job(
@@ -309,11 +288,51 @@ def test_demo_service_publishes_provider_prose_only_with_validated_evidence_clai
         provider_call=grounded_provider,
     )
 
-    assert response.explanation_source == "gpt-4.1-mini"
-    assert response.strengths[0].text == "Applied AI Engineer"
+    assert response.explanation_source == "model-assisted-evidence-selection"
+    assert response.strengths[0].text == "Strength evidence: Applied AI Engineer"
     assert response.strengths[0].evidence_ids == ["jd-title"]
-    assert response.explanation.text.startswith("The role is an Applied AI Engineer")
-    assert response.explanation.evidence_ids == ["jd-title", "jd-004"]
+    assert response.explanation.text == (
+        "Model-selected JD evidence: "
+        "Build AI agents and RAG prototypes for enterprise financial-services customers."
+    )
+    assert response.explanation.evidence_ids == ["jd-004"]
+
+
+@pytest.mark.parametrize("locale", ["en", "zh-Hans"])
+def test_demo_service_never_publishes_fabricated_provider_prose_with_valid_evidence_id(
+    locale: str,
+) -> None:
+    from app.analysis.explainer import LLMExplanation
+    from app.demo.contracts import DemoAnalyzeRequest
+    from app.demo.service import analyze_demo_job
+
+    def fabricated_provider(
+        prompt: dict[str, object], timeout_seconds: float | None
+    ) -> LLMExplanation:
+        del prompt, timeout_seconds
+        return LLMExplanation(
+            strengths=["Won a Nobel Prize"],
+            gaps=["Won a Nobel Prize"],
+            evidence=["jd-title"],
+            summary="The candidate won a Nobel Prize and is therefore an ideal match.",
+            strength_claims=[{"text": "Won a Nobel Prize", "evidence_ids": ["jd-title"]}],
+            gap_claims=[{"text": "Won a Nobel Prize", "evidence_ids": ["jd-title"]}],
+            summary_claim={
+                "text": "The candidate won a Nobel Prize and is therefore an ideal match.",
+                "evidence_ids": ["jd-title"],
+            },
+            selections=[{"evidence_id": "jd-title", "label": "strength"}],
+        )
+
+    response = analyze_demo_job(
+        DemoAnalyzeRequest(text=DEMO_JOB, locale=locale),
+        _enabled_settings(),
+        provider_call=fabricated_provider,
+    )
+
+    assert response.explanation_source == "model-assisted-evidence-selection"
+    assert "nobel" not in response.explanation.text.casefold()
+    assert all("nobel" not in item.text.casefold() for item in response.strengths)
 
 
 def test_demo_service_falls_back_when_provider_cites_unsupported_jd_evidence() -> None:
