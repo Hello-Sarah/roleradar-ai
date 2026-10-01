@@ -1,6 +1,6 @@
 # RoleRadar AI — Project Progress
 
-Last updated: 2026-09-03
+Last updated: 2026-10-01
 
 ## Current status
 
@@ -42,6 +42,9 @@ and GitHub Actions.
   confirmation, workflow records, idempotent execution, and non-content audits.
 - Task 7 presents those workflows through the bilingual Calm Intelligence workspace, including
   session lifecycle controls and explicit target/current/proposed/side-effect/private-data review.
+- Task 7 completed three scoped review rounds through `583d56d`; durable Copilot success links now
+  select and visibly render the exact created action item or generated CV. The final scoped
+  re-review found no new Critical or Important breakage.
 - Independent review identified transaction, stale-input, Profile-version, failure-audit, and
   deleted-target issues. Commit `128b4f9` fixed them; scoped re-review marked all findings addressed
   with no new Critical or Important breakage. See `docs/HANDOFF.md` for recovery details and lessons.
@@ -55,10 +58,12 @@ and GitHub Actions.
   Critical or Important breakage.
 - Running API exposes `/api/v1/jobs/from-text` and persisted `/api/v1/copilot/*` flows.
 - Local Dashboard returned HTTP 200 at `http://127.0.0.1:8501`.
+- Fresh 2026-10-01 controller verification passed the complete tracked pytest suite with 87%
+  coverage, tracked Ruff lint/format, Alembic head `20260825_05`, and `git diff --check`.
 
 ## Next recommended milestone
 
-1. Add the decision-first dashboard and signal-only digest over the versioned records.
-2. Add read-only dedicated-mailbox ingestion for allowlisted job alerts.
-3. Add verified structured-feed adapters one company at a time with contract tests.
-4. Validate visual and accessibility acceptance evidence across the complete bilingual workspace.
+1. Complete Task 10 browser, accessibility, and immutable acceptance-evidence automation.
+2. Complete Task 11 release documentation, final acceptance, and portfolio handoff.
+3. Add read-only dedicated-mailbox ingestion for allowlisted job alerts after V1 acceptance.
+4. Add verified structured-feed adapters one company at a time with contract tests.

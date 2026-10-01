@@ -12,7 +12,7 @@ artifacts remain in `.superpowers/sdd/2026-08-25-role-radar-v1/`.
 - Repository: `https://github.com/Hello-Sarah/roleradar-ai`
 - Active branch: `codex/roleradar-v1`
 - Persistent worktree: repository-managed `.worktrees/roleradar-v1`
-- Independently verified Task 7 remote head: `806fc31`
+- Independently verified Task 7 implementation head: `583d56d`
 - Independently verified Task 8 remote head: `ce268b3`
 - Accepted Task 6 implementation and fix head: `128b4f9`
 - Stable demo through accepted Task 5: `f70f979`
@@ -76,6 +76,29 @@ clean
 Task 7 was subsequently independently verified locally and fast-forwarded to
 `origin/codex/roleradar-v1` at `806fc31`: plain `pytest` passed 261 tests with 85% total coverage,
 `ruff check .` passed, and `ruff format --check` passed.
+
+Three scoped review rounds then hardened the delivered workflow. Commit `164da8e` aligned Dashboard
+drill-throughs with persisted `career-fit-v2` recommendation bands and scoring versions, displayed
+persisted recommendations instead of reconstructing them from scores, and expanded rendered
+Streamlit workflow coverage. Commit `583d56d` completed durable Copilot success destinations: the
+Dashboard selects and visibly renders the exact created action item, while CV Library selects and
+renders the exact generated CV with its ID, filename, and download URL. Scoped independent
+re-review marked the remaining finding addressed with no new Critical or Important breakage.
+Fresh controller verification after concurrent Demo work settled passed the complete tracked test
+suite at 87% coverage, tracked Ruff lint/format, Alembic head, and diff checks.
+
+Ruling: immutable browser traces, screenshots, axe output, and the release evidence bundle remain
+Task 10 scope. Task 7 provides rendered Streamlit AppTest coverage and live smoke evidence; Task 10
+must still produce the release-grade browser/accessibility artifacts before V1 acceptance.
+
+## Local Watch List update
+
+- Replit was added to the local Watch List as record `37` using its official Ashby structured feed:
+  `https://jobs.ashbyhq.com/replit?locationId=2ba4ea42-0aac-4468-bc7b-cfd0d7842252`.
+- The supplied location filter resolves to NYC (SoHo), so its action window is stored as
+  `apply_after_us_relocation`; work authorization remains evidence-dependent per job.
+- This is user data in the local ignored `roleradar.db`, not a repository seed change. Rebuilding or
+  replacing the local database requires re-adding it unless the user later requests a seed update.
 
 ## Completed implementation: Task 8
 
