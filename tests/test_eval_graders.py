@@ -1,6 +1,10 @@
 from io import BytesIO
+from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import pytest
+
+from app.evals.contracts import load_dataset
 from app.evals.graders import (
     grade_bilingual_parity,
     grade_cv_case,
@@ -35,6 +39,54 @@ def test_deterministic_contract_graders() -> None:
     )
 
     assert all(result.passed for result in (schema, score, evidence, writes, parity))
+
+
+@pytest.mark.parametrize(
+    ("field", "mismatched_value"),
+    [
+        ("classification_label", "Project Management"),
+        ("recommendation", "Skip"),
+        ("scores", [45, 45]),
+    ],
+)
+def test_jd_bilingual_parity_rejects_actual_contract_mismatches(
+    field: str, mismatched_value: object
+) -> None:
+    english = {
+        "classification_label": "Applied AI Engineer",
+        "recommendation": "Strong Apply",
+        "scores": [75, 75],
+        "available_evidence_ids": ["jd-title", "jd-001"],
+        "evidence_ids": ["jd-001"],
+    }
+    chinese = {**english, field: mismatched_value}
+
+    result = grade_bilingual_parity(english, chinese)
+
+    assert result.passed is False
+    assert result.metrics["mismatches"] == 1
+
+
+def test_matching_release_critical_jd_pair_passes_bilingual_parity() -> None:
+    dataset = load_dataset(Path("evals/datasets/v1.jsonl"))
+    english = next(
+        item
+        for item in dataset.items
+        if item.suite == "jd" and item.locale == "en" and item.pair_id
+    )
+    chinese = next(item for item in dataset.items if item.id == english.pair_id)
+
+    assert grade_bilingual_parity(english.actual, chinese.actual).passed is True
+
+
+def test_copilot_bilingual_parity_compares_action_and_write_count() -> None:
+    left = {"action": "refuse", "write_count": 0, "answer": "English localized prose"}
+    right = {"action": "refuse", "write_count": 1, "answer": "中文本地化文本"}
+
+    result = grade_bilingual_parity(left, right)
+
+    assert result.passed is False
+    assert result.metrics["compared_fields"] == 2
 
 
 def test_docx_structure_grader_requires_a_valid_document() -> None:

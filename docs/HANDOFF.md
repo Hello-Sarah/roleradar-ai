@@ -189,6 +189,48 @@ Durable lessons: validate privacy before Pydantic normalization so even malforme
 private data; make bilingual links mutual rather than accepting one-way references; and record safe
 structured output plus its full hash instead of copying unbounded provider text into release reports.
 
+### Task 9 independent-review follow-up
+
+Independent review found an Important parity gap: the grader compared legacy `score` and `class`
+keys, while committed JD outputs use `scores`, `classification_label`, `recommendation`,
+`available_evidence_ids`, and `evidence_ids`. A Chinese result could therefore disagree on its class,
+recommendation, or repeated scores while the parity grade still passed. Regression tests first
+reproduced all three false passes and a Copilot `write_count` false pass.
+
+The parity grader is now contract-aware. It compares the five structured JD decision fields, the
+Copilot `action` and `write_count` fields, or the three structured CV artifact fields, depending on
+the paired output schema. Locale-specific prose is deliberately excluded. Tests also load a real
+release-critical English/Chinese pair from the committed dataset and require it to pass. The Ruff
+Markdown formatter was applied to the implementation plan to fix the independent CI format failure.
+
+Follow-up verification:
+
+```text
+python -m pytest -q -o addopts='' --noconftest tests/test_eval_graders.py tests/test_eval_runner.py
+12 passed
+
+python -m app.evals.runner --dataset evals/datasets/v1.jsonl --output /tmp/roleradar-evals
+passed=true; item_count=130; failed_items=0; zero_tolerance_failures=0
+
+ruff check .
+All checks passed!
+
+ruff format --check .
+98 files already formatted
+
+ruff format --preview --check docs/superpowers/plans/2026-08-25-role-radar-v1.md
+1 file already formatted
+
+alembic heads
+20260825_05 (head)
+
+git diff --check
+clean
+```
+
+Lesson: bilingual parity fields must be derived from the versioned output contract, not from legacy
+or display-oriented names; write-count parity is part of Copilot safety, not merely an output detail.
+
 ## Completed review: Task 6
 
 Task 6 adds persisted Career Copilot conversations, typed action proposals, mandatory confirmation,

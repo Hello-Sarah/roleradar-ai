@@ -134,8 +134,10 @@ git commit -m "feat: add versioned database migrations"
 def test_explicit_locale_wins_over_browser():
     assert resolve_locale("en", "zh-CN") == "en"
 
+
 def test_catalogs_have_identical_keys():
     assert_catalog_parity()
+
 
 def test_recommendation_translation():
     assert translate("zh-Hans", "score.must_apply") == "必须申请"
@@ -184,10 +186,12 @@ git commit -m "feat: add complete bilingual product catalogs"
 - [ ] **Step 1: Write boundary and determinism tests**
 
 ```python
-@pytest.mark.parametrize(("score", "band"), [(85, "Must Apply"), (70, "Strong Apply"),
-                                              (55, "Selective"), (54, "Skip")])
+@pytest.mark.parametrize(
+    ("score", "band"), [(85, "Must Apply"), (70, "Strong Apply"), (55, "Selective"), (54, "Skip")]
+)
 def test_band_boundaries(score, band):
     assert recommendation_band(score) == band
+
 
 def test_same_evidence_produces_same_score(fde_fixture, profile_fixture):
     assert score_job_v2(fde_fixture, profile_fixture) == score_job_v2(fde_fixture, profile_fixture)
@@ -248,10 +252,13 @@ git commit -m "feat: implement versioned Career Fit Score V2"
 
 ```python
 def test_dimensions_change_independently(client, seeded_company):
-    updated = client.patch(f"/api/v1/watchlist/companies/{seeded_company.id}",
-                           json={"action_window": "relationship_only"}).json()
+    updated = client.patch(
+        f"/api/v1/watchlist/companies/{seeded_company.id}",
+        json={"action_window": "relationship_only"},
+    ).json()
     assert updated["company_type"] == seeded_company.company_type
     assert updated["strategic_priority"] == seeded_company.strategic_priority
+
 
 def test_banks_and_consulting_seed_separately(seed_map):
     assert seed_map["HSBC"].company_type == "financial_institution"

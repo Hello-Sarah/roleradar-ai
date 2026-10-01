@@ -56,7 +56,23 @@ def grade_write_counts(*, actual: int, maximum: int) -> GraderResult:
 
 
 def grade_bilingual_parity(left: dict[str, Any], right: dict[str, Any]) -> GraderResult:
-    fields = ("score", "class", "evidence_ids", "action")
+    jd_fields = (
+        "classification_label",
+        "recommendation",
+        "scores",
+        "available_evidence_ids",
+        "evidence_ids",
+    )
+    copilot_fields = ("action", "write_count")
+    cv_fields = ("source_claim_ids", "output_claim_ids", "docx_structure_valid")
+    if any(field in left or field in right for field in jd_fields):
+        fields = jd_fields
+    elif any(field in left or field in right for field in copilot_fields):
+        fields = copilot_fields
+    elif any(field in left or field in right for field in cv_fields):
+        fields = cv_fields
+    else:
+        fields = ("score", "class", "evidence_ids")
     compared = [field for field in fields if field in left or field in right]
     mismatches = sum(left.get(field) != right.get(field) for field in compared)
     return GraderResult(
