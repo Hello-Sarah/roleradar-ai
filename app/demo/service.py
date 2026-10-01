@@ -1,7 +1,7 @@
 """Stateless orchestration for one public job-analysis request."""
 
 from app.analysis.classifier import classify_job
-from app.analysis.explainer import ExplanationProvider, explain_fit
+from app.analysis.explainer import EvidenceGroundedClaim, ExplanationProvider, explain_fit
 from app.config import Settings
 from app.demo.contracts import DemoAnalysisResponse, DemoAnalyzeRequest, DemoInputLimitError
 from app.demo.profile import PUBLIC_DEMO_PROFILE_VERSION, public_demo_profile
@@ -89,15 +89,28 @@ def analyze_demo_job(
         provider_call=provider_call,
         timeout_seconds=settings.demo_provider_timeout_seconds,
         allowed_evidence=score.evidence,
+        locale=payload.locale,
     )
     recommendation_label = _RECOMMENDATION_LABELS[payload.locale][score.recommendation_band]
     next_action_label = _NEXT_ACTION_LABELS[payload.locale][score.recommended_next_action]
-    strengths = [flag.code for flag in score.matched_green_flags] or ["NO_MATCHED_GREEN_FLAGS"]
-    gaps = [
-        weak
-        for dimension in score.dimensions.values()
-        for weak in dimension.missing_or_weak_evidence
-    ] or ["NO_WEAK_DIMENSIONS"]
+    if explanation_source == "deterministic-fallback":
+        summary_claim = explanation.summary_claim
+        if summary_claim is None:
+            raise ValueError("Deterministic explanation must include evidence-grounded summary")
+        localized_summary = _localized_explanation(
+            locale=payload.locale,
+            score=score.total_score,
+            recommendation_label=recommendation_label,
+        )
+        explanation = explanation.model_copy(
+            update={
+                "summary": localized_summary,
+                "summary_claim": EvidenceGroundedClaim(
+                    text=localized_summary,
+                    evidence_ids=summary_claim.evidence_ids,
+                ),
+            }
+        )
     return DemoAnalysisResponse.from_explanation(
         job=job,
         classification=classification,
@@ -109,17 +122,7 @@ def analyze_demo_job(
         green_flags=score.matched_green_flags,
         recommendation=score.recommendation_band,
         next_action=score.recommended_next_action,
-        explanation=explanation.model_copy(
-            update={
-                "strengths": strengths,
-                "gaps": gaps,
-                "summary": _localized_explanation(
-                    locale=payload.locale,
-                    score=score.total_score,
-                    recommendation_label=recommendation_label,
-                ),
-            }
-        ),
+        explanation=explanation,
         explanation_source=explanation_source,
         profile_version=PUBLIC_DEMO_PROFILE_VERSION,
         locale=payload.locale,

@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.analysis.explainer import LLMExplanation
+from app.analysis.explainer import EvidenceGroundedClaim, LLMExplanation
 from app.schemas import ClassificationRead, JobCreate, Locale
 from app.scoring.v2 import DimensionScore, EvidenceFlag, EvidenceItem
 
@@ -33,15 +33,15 @@ class DemoAnalysisResponse(BaseModel):
     score: int = Field(ge=0, le=100)
     dimensions: dict[str, DimensionScore]
     evidence: list[EvidenceItem]
-    strengths: list[str]
-    gaps: list[str]
+    strengths: list[EvidenceGroundedClaim]
+    gaps: list[EvidenceGroundedClaim]
     red_flags: list[EvidenceFlag]
     green_flags: list[EvidenceFlag]
     recommendation: str
     recommendation_label: str
     next_action: str
     next_action_label: str
-    explanation: str
+    explanation: EvidenceGroundedClaim
     explanation_source: str
     profile_version: str
     locale: Locale
@@ -74,15 +74,15 @@ class DemoAnalysisResponse(BaseModel):
             score=score,
             dimensions=dimensions,
             evidence=evidence,
-            strengths=explanation.strengths,
-            gaps=explanation.gaps,
+            strengths=explanation.strength_claims,
+            gaps=explanation.gap_claims,
             red_flags=red_flags,
             green_flags=green_flags,
             recommendation=recommendation,
             recommendation_label=recommendation_label,
             next_action=next_action,
             next_action_label=next_action_label,
-            explanation=explanation.summary,
+            explanation=explanation.summary_claim,
             explanation_source=explanation_source,
             profile_version=profile_version,
             locale=locale,

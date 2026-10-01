@@ -126,9 +126,9 @@ def test_demo_excludes_unsupported_claims_from_explanation() -> None:
         _settings(),
     )
 
-    assert "unsupported private achievement" not in response.explanation.casefold()
+    assert "unsupported private achievement" not in response.explanation.text.casefold()
     assert all(
-        "unsupported private achievement" not in item.casefold() for item in response.strengths
+        "unsupported private achievement" not in item.text.casefold() for item in response.strengths
     )
 
 
@@ -256,9 +256,64 @@ def test_demo_service_does_not_publish_enabled_provider_claims_outside_jd_eviden
         provider_call=unsupported_claim_provider,
     )
 
+    assert response.explanation_source == "deterministic-fallback"
+    assert "nobel" not in response.explanation.text.casefold()
+    assert all("nobel" not in item.text.casefold() for item in response.strengths)
+
+
+def test_demo_service_publishes_provider_prose_only_with_validated_evidence_claims() -> None:
+    from app.analysis.explainer import LLMExplanation
+    from app.demo.contracts import DemoAnalyzeRequest
+    from app.demo.service import analyze_demo_job
+
+    def grounded_provider(
+        prompt: dict[str, object], timeout_seconds: float | None
+    ) -> LLMExplanation:
+        del timeout_seconds
+        assert prompt["evidence_catalog"][0] == {
+            "id": "jd-title",
+            "text": "Applied AI Engineer",
+        }
+        assert {item["id"] for item in prompt["evidence_catalog"]} >= {"jd-title", "jd-004"}
+        return LLMExplanation(
+            strengths=["Applied AI Engineer"],
+            gaps=[
+                "Build AI agents and RAG prototypes for enterprise financial-services customers."
+            ],
+            evidence=["jd-title", "jd-004"],
+            summary=(
+                "The role is an Applied AI Engineer opportunity with grounded delivery evidence."
+            ),
+            strength_claims=[{"text": "Applied AI Engineer", "evidence_ids": ["jd-title"]}],
+            gap_claims=[
+                {
+                    "text": (
+                        "Build AI agents and RAG prototypes for enterprise financial-services "
+                        "customers."
+                    ),
+                    "evidence_ids": ["jd-004"],
+                }
+            ],
+            summary_claim={
+                "text": (
+                    "The role is an Applied AI Engineer opportunity with grounded delivery "
+                    "evidence."
+                ),
+                "evidence_ids": ["jd-title", "jd-004"],
+            },
+        )
+
+    response = analyze_demo_job(
+        DemoAnalyzeRequest(text=DEMO_JOB, locale="en"),
+        _enabled_settings(),
+        provider_call=grounded_provider,
+    )
+
     assert response.explanation_source == "gpt-4.1-mini"
-    assert "nobel" not in response.explanation.casefold()
-    assert all("nobel" not in item.casefold() for item in response.strengths)
+    assert response.strengths[0].text == "Applied AI Engineer"
+    assert response.strengths[0].evidence_ids == ["jd-title"]
+    assert response.explanation.text.startswith("The role is an Applied AI Engineer")
+    assert response.explanation.evidence_ids == ["jd-title", "jd-004"]
 
 
 def test_demo_service_falls_back_when_provider_cites_unsupported_jd_evidence() -> None:
@@ -336,7 +391,7 @@ def test_demo_localizes_presentation_without_changing_machine_values() -> None:
     assert chinese.next_action == english.next_action
     assert chinese.recommendation_label != english.recommendation_label
     assert chinese.next_action_label != english.next_action_label
-    assert "确定性" in chinese.explanation
+    assert "确定性" in chinese.explanation.text
 
 
 def test_demo_service_enforces_configured_text_limit() -> None:
