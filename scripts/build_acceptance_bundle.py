@@ -720,7 +720,6 @@ def _eval_check_result(
                 "evidence_ids",
                 "grounded_answer",
                 "answer_language",
-                "bilingual_parity",
             },
             lambda row: row.get("output", {}).get("action") == "answer",
         ),
@@ -756,7 +755,22 @@ def _eval_check_result(
         )
     if missing:
         return "Blocked", f"items={len(selected)}, missing_named_graders={missing}"
-    return "Pass" if failures == 0 else "Fail", f"items={len(selected)}, grader_failures={failures}"
+    parity_count = 0
+    if check_name == "copilot-grounded-answer":
+        parity_results = [
+            result
+            for row in selected
+            for result in row.get("grader_results", [])
+            if isinstance(result, dict) and result.get("name") == "bilingual_parity"
+        ]
+        if not parity_results:
+            return "Blocked", f"items={len(selected)}, paired parity graders are missing"
+        parity_count = len(parity_results)
+        failures += sum(result.get("passed") is not True for result in parity_results)
+    return (
+        "Pass" if failures == 0 else "Fail",
+        f"items={len(selected)}, parity_rows={parity_count}, grader_failures={failures}",
+    )
 
 
 def _criterion_check_result(

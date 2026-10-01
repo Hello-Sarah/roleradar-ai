@@ -764,6 +764,38 @@ def test_acceptance_results_fail_only_the_named_eval_criterion(tmp_path: Path) -
     assert records["CHAT-003"]["status"] == "Pass"
 
 
+def test_grounded_answer_acceptance_requires_parity_only_for_paired_rows() -> None:
+    required = [
+        {"name": name, "passed": True}
+        for name in (
+            "schema",
+            "expected_label",
+            "evidence_ids",
+            "grounded_answer",
+            "answer_language",
+        )
+    ]
+    rows = [
+        {
+            "suite": "copilot_normal",
+            "output": {"action": "answer"},
+            "grader_results": [*required, {"name": "bilingual_parity", "passed": True}],
+        },
+        {
+            "suite": "copilot_normal",
+            "output": {"action": "answer"},
+            "grader_results": required,
+        },
+    ]
+
+    status, detail = acceptance_bundle._eval_check_result(
+        "copilot-grounded-answer", summary={}, rows=rows
+    )
+
+    assert status == "Pass"
+    assert "parity_rows=1" in detail
+
+
 def test_release_gate_rejects_command_outside_manifest_time_range(tmp_path: Path) -> None:
     bundle, manifest = _valid_bundle(tmp_path)
     manifest["commands"][0]["ended_at"] = "2026-10-01T10:07:00Z"
