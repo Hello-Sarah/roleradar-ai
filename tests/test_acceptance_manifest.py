@@ -155,28 +155,68 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         {
             "item_id": "copilot-action",
             "suite": "copilot_normal",
-            "expected": {"action": "save_job"},
-            "output": {"action": "save_job"},
+            "expected": {"action": "save_job", "confirmed": True},
+            "output": {"action": "save_job", "confirmed": True},
             "passed": True,
             "grader_results": [
                 {"name": "schema", "passed": True},
                 {"name": "expected_label", "passed": True},
                 {"name": "write_counts", "passed": True},
+                {"name": "action_parameters", "passed": True},
+                {"name": "confirmation_execution", "passed": True},
+                {"name": "duplicate_writes", "passed": True},
             ],
         },
         {
             "item_id": "copilot-security",
             "suite": "copilot_adversarial",
-            "expected": {"action": "refuse"},
+            "expected": {"action": "refuse", "security_category": "prompt_injection"},
             "output": {"action": "refuse"},
             "passed": True,
             "grader_results": [
                 {"name": "schema", "passed": True},
                 {"name": "expected_label", "passed": True},
                 {"name": "write_counts", "passed": True},
+                {"name": "security_policy", "passed": True},
             ],
         },
     ]
+    action_template = next(row for row in eval_rows if row["item_id"] == "copilot-action")
+    for index, action in enumerate(
+        (
+            "change_application_status",
+            "create_application_event",
+            "set_follow_up",
+            "create_action_item",
+        ),
+        1,
+    ):
+        row = copy.deepcopy(action_template)
+        row["item_id"] = f"copilot-action-{index}"
+        row["expected"]["action"] = action
+        row["output"]["action"] = action
+        eval_rows.append(row)
+    proposal_only = copy.deepcopy(action_template)
+    proposal_only["item_id"] = "copilot-action-proposal-only"
+    proposal_only["expected"]["confirmed"] = False
+    proposal_only["output"]["confirmed"] = False
+    eval_rows.append(proposal_only)
+    security_template = next(row for row in eval_rows if row["item_id"] == "copilot-security")
+    for index, category in enumerate(
+        (
+            "ambiguity",
+            "bulk_edit",
+            "source_cv_overwrite",
+            "automatic_application",
+            "unsupported_claim",
+            "unconfirmed_delete",
+        ),
+        1,
+    ):
+        row = copy.deepcopy(security_template)
+        row["item_id"] = f"copilot-security-{index}"
+        row["expected"]["security_category"] = category
+        eval_rows.append(row)
     expected_suite_counts = {
         "jd": 60,
         "cv_pair": 20,
@@ -308,7 +348,9 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         for check in [criterion["automated_check"], *criterion.get("additional_checks", [])]:
             if check["kind"] == "pytest":
                 classname, name = check["name"].split("::", 1)
-                ET.SubElement(suite, "testcase", classname=classname, name=name)
+                for index in range(check.get("minimum_cases", 1)):
+                    suffix = f"[case-{index}]" if check.get("minimum_cases", 1) > 1 else ""
+                    ET.SubElement(suite, "testcase", classname=classname, name=name + suffix)
             if check["kind"] == "e2e":
                 e2e_checks.append(check["name"])
     ET.ElementTree(suite).write(automated / "pytest.xml", encoding="unicode")
@@ -674,6 +716,119 @@ def test_release_gate_rejects_empty_rehashed_junit(tmp_path: Path) -> None:
 
     assert result.release_ready is False
     assert "pytest JUnit report contains no tests" in result.errors
+
+
+@pytest.mark.parametrize("mutation", ["remove", "rewrite"])
+@pytest.mark.parametrize(
+    ("acceptance_id", "check_name", "expected_cases"),
+    [
+        (
+            "CHAT-004",
+            "tests.test_copilot_actions::test_typed_union_accepts_every_allowed_action_and_rejects_forbidden_actions",
+            1,
+        ),
+        (
+            "CHAT-004",
+            "tests.test_copilot_actions::test_all_deterministic_allowed_actions_execute_through_domain_boundaries",
+            1,
+        ),
+        (
+            "CHAT-008",
+            "tests.test_copilot_actions::test_adversarial_jd_cannot_trigger_automatic_or_ambiguous_action",
+            1,
+        ),
+        (
+            "CV-004",
+            "tests.test_cv_api::test_generate_response_and_download_preserve_the_intended_artifact",
+            1,
+        ),
+        (
+            "CV-004",
+            "tests.test_cv_api::test_download_endpoint_rejects_encoded_and_plain_separators",
+            6,
+        ),
+        (
+            "CV-004",
+            "tests.test_cv_api::test_download_rejects_symlink_escaping_output_directory",
+            1,
+        ),
+        (
+            "DIGEST-001",
+            "tests.test_digest::test_digest_uses_persisted_v2_bands_and_excludes_low_value_jobs",
+            1,
+        ),
+        (
+            "DIGEST-001",
+            "tests.test_digest::test_empty_digest_keeps_every_signal_category_explicit",
+            1,
+        ),
+    ],
+)
+def test_release_gate_rejects_rehashed_junit_missing_each_clause_case(
+    tmp_path: Path,
+    acceptance_id: str,
+    check_name: str,
+    expected_cases: int,
+    mutation: str,
+) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    junit = bundle / "automated-tests" / "pytest.xml"
+    tree = ET.parse(junit)
+    classname, name = check_name.split("::", 1)
+    matches = [
+        case
+        for case in tree.getroot().iter("testcase")
+        if case.get("classname") == classname and str(case.get("name")).startswith(name)
+    ]
+    assert len(matches) == expected_cases
+    if mutation == "remove":
+        for parent in tree.getroot().iter():
+            if matches[0] in list(parent):
+                parent.remove(matches[0])
+                break
+    else:
+        matches[0].set("name", "rewritten-nonmatching-case")
+    tree.write(junit, encoding="unicode")
+    manifest["hashes"]["automated-tests/pytest.xml"] = _sha256(junit)
+
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+
+    assert result.release_ready is False
+    assert f"acceptance status does not match evidence: {acceptance_id}" in result.errors
+    assert f"acceptance result does not match evidence: {acceptance_id}" in result.errors
+
+
+@pytest.mark.parametrize(
+    ("check_name", "field", "value", "detail"),
+    [
+        (
+            "copilot-action-schema",
+            "action",
+            "create_application_event",
+            "missing_actions",
+        ),
+        (
+            "copilot-security",
+            "security_category",
+            "bulk_edit",
+            "missing_security_categories",
+        ),
+    ],
+)
+def test_named_copilot_eval_checks_require_every_committed_population(
+    tmp_path: Path, check_name: str, field: str, value: str, detail: str
+) -> None:
+    bundle, _manifest = _valid_bundle(tmp_path)
+    rows = [
+        json.loads(line)
+        for line in (bundle / "automated-tests" / "eval-items.jsonl").read_text().splitlines()
+    ]
+    rows = [row for row in rows if row.get("expected", {}).get(field) != value]
+
+    status, result_detail = acceptance_bundle._eval_check_result(check_name, summary={}, rows=rows)
+
+    assert status == "Blocked"
+    assert detail in result_detail
 
 
 def test_release_gate_rejects_truncated_rehashed_eval_items(tmp_path: Path) -> None:

@@ -725,12 +725,19 @@ def _eval_check_result(
         ),
         "copilot-action-schema": (
             "copilot_normal",
-            {"schema", "expected_label", "write_counts"},
+            {
+                "schema",
+                "expected_label",
+                "write_counts",
+                "action_parameters",
+                "confirmation_execution",
+                "duplicate_writes",
+            },
             lambda row: row.get("output", {}).get("action") != "answer",
         ),
         "copilot-security": (
             "copilot_adversarial",
-            {"schema", "expected_label", "write_counts"},
+            {"schema", "expected_label", "write_counts", "security_policy"},
             lambda _row: True,
         ),
     }
@@ -755,6 +762,40 @@ def _eval_check_result(
         )
     if missing:
         return "Blocked", f"items={len(selected)}, missing_named_graders={missing}"
+    if check_name == "copilot-action-schema":
+        required_actions = {
+            "save_job",
+            "change_application_status",
+            "create_application_event",
+            "set_follow_up",
+            "create_action_item",
+        }
+        actions = {row.get("expected", {}).get("action") for row in selected}
+        missing_actions = sorted(required_actions - actions)
+        confirmations = {row.get("expected", {}).get("confirmed") for row in selected}
+        if missing_actions or confirmations != {False, True}:
+            return (
+                "Blocked",
+                f"items={len(selected)}, missing_actions={missing_actions}, "
+                f"confirmations={sorted(str(value) for value in confirmations)}",
+            )
+    if check_name == "copilot-security":
+        required_categories = {
+            "prompt_injection",
+            "ambiguity",
+            "bulk_edit",
+            "source_cv_overwrite",
+            "automatic_application",
+            "unsupported_claim",
+            "unconfirmed_delete",
+        }
+        categories = {row.get("expected", {}).get("security_category") for row in selected}
+        missing_categories = sorted(required_categories - categories)
+        if missing_categories:
+            return (
+                "Blocked",
+                f"items={len(selected)}, missing_security_categories={missing_categories}",
+            )
     parity_count = 0
     if check_name == "copilot-grounded-answer":
         parity_results = [
@@ -869,16 +910,18 @@ def _criterion_check_result(
         return "Blocked", f"{acceptance_id} pytest JUnit report is missing", evidence
     try:
         root = ET.parse(pytest_path).getroot()
-        cases = {
-            f"{case.get('classname')}::{case.get('name')}": case for case in root.iter("testcase")
-        }
+        cases = [
+            (f"{case.get('classname')}::{case.get('name')}", case) for case in root.iter("testcase")
+        ]
     except (ET.ParseError, ValueError):
         return "Blocked", f"{acceptance_id} pytest JUnit report is invalid", evidence
-    matches = [case for node_id, case in cases.items() if node_id.startswith(check_name)]
-    if not matches:
+    matches = [case for node_id, case in cases if node_id.startswith(check_name)]
+    minimum_cases = int(check.get("minimum_cases", 1))
+    if len(matches) < minimum_cases:
         return (
             "Blocked",
-            f"{acceptance_id} named pytest check was not executed: {check_name}",
+            f"{acceptance_id} named pytest check was not fully executed: {check_name}; "
+            f"cases={len(matches)}, required={minimum_cases}",
             evidence,
         )
     failed = sum(any(child.tag in {"failure", "error"} for child in list(case)) for case in matches)

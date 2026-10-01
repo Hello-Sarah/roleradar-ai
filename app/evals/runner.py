@@ -16,14 +16,18 @@ from app.evals.contracts import EvalDataset, EvalItem, load_dataset
 from app.evals.graders import (
     GRADER_VERSION,
     GraderResult,
+    grade_action_parameters,
     grade_answer_language,
     grade_bilingual_parity,
+    grade_confirmation_execution,
     grade_critical_field_extraction,
     grade_cv_case,
+    grade_duplicate_writes,
     grade_evidence_ids,
     grade_grounded_answer,
     grade_schema,
     grade_score_stability,
+    grade_security_policy,
     grade_write_counts,
 )
 from app.evals.report import canonical_hash, write_reports
@@ -114,7 +118,7 @@ def _grade_item(item: EvalItem, output: dict[str, Any]) -> list[GraderResult]:
             maximum=item.expected["max_writes"],
         ),
     ]
-    if output.get("action") == "answer":
+    if item.expected.get("action") == "answer":
         results.extend(
             [
                 grade_evidence_ids(
@@ -127,6 +131,51 @@ def _grade_item(item: EvalItem, output: dict[str, Any]) -> list[GraderResult]:
                     forbidden_facts=item.expected.get("forbidden_facts", []),
                 ),
                 grade_answer_language(str(output.get("answer", "")), item.locale),
+            ]
+        )
+    elif item.suite == "copilot_normal":
+        results.extend(
+            [
+                grade_schema(
+                    output,
+                    required_fields={
+                        "action",
+                        "parameters",
+                        "confirmed",
+                        "pre_confirmation_writes",
+                        "write_count",
+                        "duplicate_writes",
+                        "idempotent_result",
+                    },
+                ),
+                grade_action_parameters(item.expected["parameters"], output.get("parameters", {})),
+                grade_confirmation_execution(
+                    expected_confirmed=item.expected["confirmed"],
+                    actual_confirmed=bool(output.get("confirmed")),
+                    pre_confirmation_writes=int(output.get("pre_confirmation_writes", -1)),
+                    actual_writes=int(output.get("write_count", -1)),
+                ),
+                grade_duplicate_writes(
+                    int(output.get("duplicate_writes", -1)),
+                    idempotent_result=bool(output.get("idempotent_result")),
+                ),
+            ]
+        )
+    else:
+        results.extend(
+            [
+                grade_schema(
+                    output,
+                    required_fields={
+                        "action",
+                        "write_count",
+                        "pre_confirmation_writes",
+                        "duplicate_writes",
+                    },
+                ),
+                grade_security_policy(
+                    item.expected["security_category"], str(output.get("action", ""))
+                ),
             ]
         )
     return results
@@ -150,6 +199,11 @@ def _safe_output(output: dict[str, Any]) -> dict[str, Any]:
         "extracted_fields",
         "unsupported_claim_rejected",
         "answer_fact_ids",
+        "parameters",
+        "confirmed",
+        "pre_confirmation_writes",
+        "duplicate_writes",
+        "idempotent_result",
     }
     return {key: output[key] for key in sorted(output.keys() & safe_fields)}
 

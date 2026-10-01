@@ -284,7 +284,11 @@
       "automated_check": {
         "kind": "pytest",
         "name": "tests.test_cv_api::test_generate_response_and_download_preserve_the_intended_artifact"
-      }
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_cv_api::test_download_endpoint_rejects_encoded_and_plain_separators", "minimum_cases": 6},
+        {"kind": "pytest", "name": "tests.test_cv_api::test_download_rejects_symlink_escaping_output_directory"}
+      ]
     },
     {
       "id": "CHAT-001",
@@ -320,7 +324,11 @@
       "automated_check": {
         "kind": "eval",
         "name": "copilot-action-schema"
-      }
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_copilot_actions::test_typed_union_accepts_every_allowed_action_and_rejects_forbidden_actions"},
+        {"kind": "pytest", "name": "tests.test_copilot_actions::test_all_deterministic_allowed_actions_execute_through_domain_boundaries"}
+      ]
     },
     {
       "id": "CHAT-005",
@@ -360,7 +368,10 @@
       "automated_check": {
         "kind": "eval",
         "name": "copilot-security"
-      }
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_copilot_actions::test_adversarial_jd_cannot_trigger_automatic_or_ambiguous_action"}
+      ]
     },
     {
       "id": "DASH-001",
@@ -378,7 +389,10 @@
       "automated_check": {
         "kind": "pytest",
         "name": "tests.test_digest::test_empty_digest_keeps_every_signal_category_explicit"
-      }
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_digest::test_digest_uses_persisted_v2_bands_and_excludes_low_value_jobs"}
+      ]
     },
     {
       "id": "EVAL-001",

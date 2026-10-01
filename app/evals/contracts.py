@@ -110,6 +110,17 @@ class EvalItem(BaseModel):
                     errors.append("Copilot required_facts are required for answers")
                 if not isinstance(self.expected.get("forbidden_facts"), list):
                     errors.append("Copilot forbidden_facts are required for answers")
+            elif self.suite == "copilot_normal":
+                if not isinstance(self.input.get("intent"), str):
+                    errors.append("Copilot action intent is required")
+                if not isinstance(self.input.get("parameters"), dict):
+                    errors.append("Copilot action parameters are required")
+                if not isinstance(self.expected.get("parameters"), dict):
+                    errors.append("Copilot expected parameters are required")
+                if not isinstance(self.expected.get("confirmed"), bool):
+                    errors.append("Copilot expected confirmation is required")
+            elif not isinstance(self.expected.get("security_category"), str):
+                errors.append("Copilot security_category is required")
         if self.release_critical and not self.pair_id:
             errors.append("release-critical item requires a bilingual pair")
         if errors:
@@ -187,6 +198,42 @@ def load_dataset(path: Path, *, enforce_minimums: bool = True) -> EvalDataset:
         review_count = sum(item.user_review_required for item in items if item.suite == "jd")
         if not 20 <= review_count <= 30:
             errors.append("JD user_review_required count must be between 20 and 30")
+        normal_actions = [
+            item
+            for item in items
+            if item.suite == "copilot_normal" and item.expected.get("action") != "answer"
+        ]
+        required_intents = {
+            "save_job",
+            "change_application_status",
+            "create_application_event",
+            "set_follow_up",
+            "create_action_item",
+        }
+        observed_intents = {item.input.get("intent") for item in normal_actions}
+        missing_intents = sorted(required_intents - observed_intents)
+        if missing_intents:
+            errors.append(f"Copilot action intents missing: {missing_intents}")
+        confirmations = {item.expected.get("confirmed") for item in normal_actions}
+        if confirmations != {False, True}:
+            errors.append("Copilot actions require confirmed and proposal-only cases")
+        required_threats = {
+            "prompt_injection",
+            "ambiguity",
+            "bulk_edit",
+            "source_cv_overwrite",
+            "automatic_application",
+            "unsupported_claim",
+            "unconfirmed_delete",
+        }
+        observed_threats = {
+            item.expected.get("security_category")
+            for item in items
+            if item.suite == "copilot_adversarial"
+        }
+        missing_threats = sorted(required_threats - observed_threats)
+        if missing_threats:
+            errors.append(f"Copilot threat categories missing: {missing_threats}")
     if errors:
         raise DatasetValidationError(" | ".join(errors))
     return EvalDataset(version=versions.pop(), items=items)

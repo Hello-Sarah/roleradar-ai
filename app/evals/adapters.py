@@ -8,15 +8,23 @@ from tempfile import TemporaryDirectory
 from typing import Any, Protocol
 
 from docx import Document
+from pydantic import TypeAdapter
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.analysis.classifier import classify_job
 from app.config import Settings
-from app.copilot.actions import ActionProposalError
+from app.copilot.actions import ActionProposalError, confirm_action, create_action_proposal
 from app.copilot.context import ContextJob, ContextSource, CopilotContext
-from app.copilot.service import GroundedAnswer, answer_question, propose_action
-from app.database.models import CVDocument, Job
+from app.copilot.contracts import ActionProposal
+from app.copilot.service import GroundedAnswer, answer_question, create_session, propose_action
+from app.database.models import (
+    ApplicationEvent,
+    CopilotActionAudit,
+    CopilotActionItem,
+    CVDocument,
+    Job,
+)
 from app.database.session import Base
 from app.evals.contracts import EvalItem
 from app.evals.graders import grade_docx_structure
@@ -42,7 +50,7 @@ class EvalAdapter(Protocol):
 class DeterministicReleaseAdapter:
     """Exercise the deterministic release paths without reading dataset oracle fields."""
 
-    model_id = "deterministic-release-v4"
+    model_id = "deterministic-release-v5"
     prompt_version = "none"
 
     def evaluate(self, item: EvalItem) -> dict[str, Any]:
@@ -267,12 +275,103 @@ class DeterministicReleaseAdapter:
                 "answer_fact_ids": ["company", "title", "location", "description"],
             }
         try:
+            intent = payload.get("intent")
+            parameters = dict(payload.get("parameters", {}))
+
+            def action_provider(_message, _context, _settings):
+                proposal_payload = {"proposal_type": intent, **parameters}
+                if intent in {
+                    "save_job",
+                    "change_application_status",
+                    "create_application_event",
+                    "set_follow_up",
+                }:
+                    proposal_payload.setdefault("expected_status", "New")
+                return TypeAdapter(ActionProposal).validate_python(proposal_payload)
+
             proposal = propose_action(
                 str(payload["message"]),
                 context,
                 Settings(ai_explanations_enabled=False, openai_api_key=None),
+                provider_call=action_provider if intent else None,
             )
         except ActionProposalError as exc:
             action = "refuse" if "unavailable" in str(exc).casefold() else "clarify"
-            return {"action": action, "write_count": 0}
-        return {"action": proposal.proposal_type, "write_count": 0}
+            return {
+                "action": action,
+                "write_count": 0,
+                "pre_confirmation_writes": 0,
+                "duplicate_writes": 0,
+            }
+        except (ValueError, TypeError):
+            return {
+                "action": "clarify",
+                "write_count": 0,
+                "pre_confirmation_writes": 0,
+                "duplicate_writes": 0,
+            }
+
+        normalized_parameters = proposal.model_dump(
+            mode="json",
+            exclude={"proposal_type", "proposal_version", "expected_status"},
+            exclude_none=True,
+        )
+        confirmed = bool(payload.get("confirm"))
+        if not confirmed:
+            return {
+                "action": proposal.proposal_type,
+                "parameters": normalized_parameters,
+                "confirmed": False,
+                "pre_confirmation_writes": 0,
+                "write_count": 0,
+                "duplicate_writes": 0,
+                "idempotent_result": True,
+            }
+
+        with TemporaryDirectory(prefix="roleradar-eval-action-") as directory:
+            engine = create_engine(f"sqlite:///{Path(directory) / 'action.sqlite3'}")
+            Base.metadata.create_all(engine)
+            with Session(engine) as db:
+                job = Job(
+                    fingerprint="eval-action-job",
+                    company=context.job.company,
+                    title=context.job.title,
+                    location=context.job.location,
+                    description=context.job.description,
+                    source="synthetic_eval",
+                    status="New",
+                )
+                db.add(job)
+                db.commit()
+                assert job.id == proposal.target_id
+                session = create_session(db, title="[SYNTHETIC] Eval action", locale=locale)
+                business_before = (
+                    db.query(ApplicationEvent).count() + db.query(CopilotActionItem).count()
+                )
+                record = create_action_proposal(db, session_id=session.id, proposal=proposal)
+                business_after_proposal = (
+                    db.query(ApplicationEvent).count() + db.query(CopilotActionItem).count()
+                )
+                first = confirm_action(
+                    record.id, f"eval-{payload.get('case_id', intent)}", db, Settings()
+                )
+                business_after_first = (
+                    db.query(ApplicationEvent).count() + db.query(CopilotActionItem).count()
+                )
+                second = confirm_action(
+                    record.id, f"eval-{payload.get('case_id', intent)}", db, Settings()
+                )
+                business_after_second = (
+                    db.query(ApplicationEvent).count() + db.query(CopilotActionItem).count()
+                )
+                audit_count = db.query(CopilotActionAudit).count()
+            engine.dispose()
+        return {
+            "action": proposal.proposal_type,
+            "parameters": normalized_parameters,
+            "confirmed": True,
+            "pre_confirmation_writes": business_after_proposal - business_before,
+            "write_count": audit_count,
+            "duplicate_writes": business_after_second - business_after_first,
+            "idempotent_result": first == second,
+        }

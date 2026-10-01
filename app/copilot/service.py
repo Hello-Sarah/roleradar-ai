@@ -157,8 +157,19 @@ def delete_session(db: Session, session_id: int) -> None:
     db.commit()
 
 
-def propose_action(message: str, context: CopilotContext, settings: Settings) -> ActionProposal:
+def propose_action(
+    message: str,
+    context: CopilotContext,
+    settings: Settings,
+    *,
+    provider_call: Callable[[str, CopilotContext, Settings], ActionProposal] | None = None,
+) -> ActionProposal:
     """Return a validated proposal; use a deterministic safe fallback when unavailable."""
+    if provider_call is not None:
+        proposal = provider_call(message, context, settings)
+        if _proposal_uses_selected_target(proposal, context):
+            return proposal
+        raise ValueError("Provider returned an ambiguous or unselected target")
     if settings.ai_explanations_enabled and settings.openai_api_key:
         client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
         try:
