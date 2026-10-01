@@ -63,13 +63,11 @@ def _stored_browser_locale() -> str | None:
 
 
 def _persist_browser_locale(locale: Locale) -> None:
-    st.iframe(
+    st.html(
         "<script>document.cookie="
         f"'{_LOCALE_COOKIE}={locale}; Path=/; Max-Age=31536000; SameSite=Lax'"
         "</script>",
-        height=1,
-        width=1,
-        tab_index=-1,
+        unsafe_allow_javascript=True,
     )
 
 

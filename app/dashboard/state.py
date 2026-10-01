@@ -128,6 +128,7 @@ def apply_job_filter(
     *,
     status: str | None = None,
     minimum_score: int | None = None,
+    priority_only: bool = False,
     gap: str | None = None,
     created_week: str | None = None,
 ) -> None:
@@ -142,6 +143,10 @@ def apply_job_filter(
         session_state.pop("ui.jobs.minimum_score", None)
     else:
         session_state["ui.jobs.minimum_score"] = minimum_score
+    if priority_only:
+        session_state["ui.jobs.priority_only"] = True
+    else:
+        session_state.pop("ui.jobs.priority_only", None)
     if gap is None:
         session_state.pop("ui.jobs.gap", None)
     else:

@@ -20,12 +20,12 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
     counts = data["status_counts"]
     metrics = st.columns(4)
     metric_specs = (
-        ("high", "dashboard.high_priority", len(data["high_priority_jobs"]), None, 75),
-        ("new", "dashboard.new", counts.get("New", 0), "New", None),
-        ("applied", "application_status.applied", counts.get("Applied", 0), "Applied", None),
-        ("interview", "dashboard.interviews", counts.get("Interview", 0), "Interview", None),
+        ("high", "dashboard.high_priority", len(data["high_priority_jobs"]), None, True),
+        ("new", "dashboard.new", counts.get("New", 0), "New", False),
+        ("applied", "application_status.applied", counts.get("Applied", 0), "Applied", False),
+        ("interview", "dashboard.interviews", counts.get("Interview", 0), "Interview", False),
     )
-    for column, (slug, label_key, value, status, minimum_score) in zip(
+    for column, (slug, label_key, value, status, priority_only) in zip(
         metrics, metric_specs, strict=True
     ):
         with column:
@@ -35,7 +35,7 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
                 key=f"dashboard-drill-{slug}",
                 use_container_width=True,
             ):
-                apply_job_filter(st.session_state, status=status, minimum_score=minimum_score)
+                apply_job_filter(st.session_state, status=status, priority_only=priority_only)
                 st.rerun()
     st.subheader(translate(locale, "dashboard.next_action"))
     next_action = data.get("next_action")

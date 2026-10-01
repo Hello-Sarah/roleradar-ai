@@ -19,11 +19,14 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
     jobs = client.get("/api/v1/jobs")
     status_filter = st.session_state.get("ui.jobs.status")
     minimum_score = st.session_state.get("ui.jobs.minimum_score")
+    priority_only = bool(st.session_state.get("ui.jobs.priority_only"))
     gap_filter = st.session_state.get("ui.jobs.gap")
     week_filter = st.session_state.get("ui.jobs.created_week")
-    if status_filter or minimum_score is not None or gap_filter or week_filter:
+    if status_filter or minimum_score is not None or priority_only or gap_filter or week_filter:
         if status_filter:
             filter_value = translate(locale, f"application_status.{str(status_filter).casefold()}")
+        elif priority_only:
+            filter_value = translate(locale, "dashboard.high_priority")
         elif gap_filter:
             filter_value = analysis_signal_label(locale, str(gap_filter), gap=True)
         else:
@@ -39,6 +42,7 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
             for key in (
                 "ui.jobs.status",
                 "ui.jobs.minimum_score",
+                "ui.jobs.priority_only",
                 "ui.jobs.gap",
                 "ui.jobs.created_week",
             ):
@@ -51,6 +55,11 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
             and (
                 minimum_score is None
                 or (job.get("analysis") or {}).get("fit_score", -1) >= minimum_score
+            )
+            and (
+                not priority_only
+                or (job.get("analysis") or {}).get("recommendation")
+                in {"Must Apply", "Strong Apply"}
             )
             and (not gap_filter or gap_filter in ((job.get("analysis") or {}).get("gaps") or []))
             and (

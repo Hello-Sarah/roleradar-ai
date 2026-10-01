@@ -136,6 +136,48 @@ class DashboardClient(RecordingClient):
         return super().get(path)
 
 
+class HighPriorityJobsClient(RecordingClient):
+    def get(self, path: str) -> Any:
+        if path == "/api/v1/jobs":
+            common = {
+                "location": "Hong Kong",
+                "url": None,
+                "status": "New",
+                "classification": {"category": "Applied AI Engineer", "confidence": 0.9},
+            }
+            return [
+                {
+                    "id": 70,
+                    "company": "Strong AI",
+                    "title": "Strong Apply at 70",
+                    **common,
+                    "analysis": {
+                        "fit_score": 70,
+                        "recommendation": "Strong Apply",
+                        "summary": "",
+                        "evidence": [],
+                        "strengths": [],
+                        "gaps": [],
+                    },
+                },
+                {
+                    "id": 84,
+                    "company": "Selective AI",
+                    "title": "Selective at 84",
+                    **common,
+                    "analysis": {
+                        "fit_score": 84,
+                        "recommendation": "Selective",
+                        "summary": "",
+                        "evidence": [],
+                        "strengths": [],
+                        "gaps": [],
+                    },
+                },
+            ]
+        return super().get(path)
+
+
 class ShellClient(DashboardClient):
     def get(self, path: str) -> Any:
         self.calls.append(("GET", path, None))
@@ -199,10 +241,22 @@ def _render_shell_with_cookie(client) -> None:
         streamlit_app._stored_browser_locale = original
 
 
+def _render_cookie_persistence() -> None:
+    from app.dashboard.streamlit_app import _persist_browser_locale
+
+    _persist_browser_locale("zh-Hans")
+
+
 def _render_dashboard(client) -> None:
     from app.dashboard.pages.dashboard import render_page
 
     render_page(client, "zh-Hans")
+
+
+def _render_jobs(client) -> None:
+    from app.dashboard.pages.jobs import render_page
+
+    render_page(client, "en")
 
 
 class CVClient(RecordingClient):
@@ -428,6 +482,23 @@ def test_dashboard_renders_due_follow_ups_and_metric_drill_through() -> None:
     assert app.session_state["ui.jobs.gap"] == "AI_DEPTH_EVIDENCE_WEAK"
 
 
+def test_high_priority_drill_through_uses_persisted_recommendation_band() -> None:
+    dashboard = AppTest.from_function(_render_dashboard, args=(DashboardClient(),)).run()
+
+    dashboard.button(key="dashboard-drill-high").click().run()
+
+    assert dashboard.session_state["ui.jobs.priority_only"] is True
+    assert "ui.jobs.minimum_score" not in dashboard.session_state
+
+    jobs = AppTest.from_function(_render_jobs, args=(HighPriorityJobsClient(),))
+    jobs.session_state["ui.jobs.priority_only"] = True
+    jobs.run()
+    text = _rendered_text(jobs)
+
+    assert "Strong Apply at 70" in text
+    assert "Selective at 84" not in text
+
+
 def test_copilot_failure_is_localized_and_renders_retry_without_escaping() -> None:
     app = AppTest.from_function(_render_failing_copilot, args=(FailingCopilotClient(),)).run()
     text = _rendered_text(app)
@@ -551,6 +622,19 @@ def test_fresh_base_url_session_restores_cookie_locale_in_rendered_shell() -> No
     assert not app.exception
     assert app.segmented_control(key="ui-language-control").value == "中文"
     assert app.title[0].value == translate("zh-Hans", "page.dashboard.title")
+
+
+def test_language_switch_renders_executable_cookie_persistence_document() -> None:
+    """Catch passing cookie JavaScript to a URL-only iframe where it cannot execute."""
+    app = AppTest.from_function(_render_cookie_persistence).run()
+
+    cookie_documents = app.get("html")
+    assert len(cookie_documents) == 1
+    assert cookie_documents[0].proto.unsafe_allow_javascript is True
+    assert (
+        "document.cookie='roleradar_locale=zh-Hans; Path=/; Max-Age=31536000; SameSite=Lax'"
+        in cookie_documents[0].proto.body
+    )
 
 
 def test_language_switch_atomically_renders_the_complete_shell_in_chinese() -> None:
