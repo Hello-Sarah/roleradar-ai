@@ -916,6 +916,33 @@ def _criterion_check_result(
     except (ET.ParseError, ValueError):
         return "Blocked", f"{acceptance_id} pytest JUnit report is invalid", evidence
     matches = [case for node_id, case in cases if node_id.startswith(check_name)]
+    required_case_ids = check.get("required_case_ids")
+    if required_case_ids is not None:
+        if not isinstance(required_case_ids, list) or not all(
+            isinstance(case_id, str) and case_id.startswith("[") and case_id.endswith("]")
+            for case_id in required_case_ids
+        ):
+            return (
+                "Blocked",
+                f"{acceptance_id} named pytest check has invalid required case identities: "
+                f"{check_name}",
+                evidence,
+            )
+        test_name = check_name.split("::", 1)[1]
+        expected_names = {f"{test_name}{case_id}" for case_id in required_case_ids}
+        observed_names = [str(case.get("name")) for case in matches]
+        if (
+            len(required_case_ids) != len(set(required_case_ids))
+            or len(observed_names) != len(set(observed_names))
+            or set(observed_names) != expected_names
+        ):
+            return (
+                "Blocked",
+                f"{acceptance_id} named pytest check did not execute each required case: "
+                f"{check_name}; expected={sorted(expected_names)}, "
+                f"observed={sorted(observed_names)}",
+                evidence,
+            )
     minimum_cases = int(check.get("minimum_cases", 1))
     if len(matches) < minimum_cases:
         return (

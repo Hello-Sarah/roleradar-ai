@@ -8,7 +8,6 @@ from tempfile import TemporaryDirectory
 from typing import Any, Protocol
 
 from docx import Document
-from pydantic import TypeAdapter
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -16,7 +15,6 @@ from app.analysis.classifier import classify_job
 from app.config import Settings
 from app.copilot.actions import ActionProposalError, confirm_action, create_action_proposal
 from app.copilot.context import ContextJob, ContextSource, CopilotContext
-from app.copilot.contracts import ActionProposal
 from app.copilot.service import GroundedAnswer, answer_question, create_session, propose_action
 from app.database.models import (
     ApplicationEvent,
@@ -50,7 +48,7 @@ class EvalAdapter(Protocol):
 class DeterministicReleaseAdapter:
     """Exercise the deterministic release paths without reading dataset oracle fields."""
 
-    model_id = "deterministic-release-v5"
+    model_id = "deterministic-release-v6"
     prompt_version = "none"
 
     def evaluate(self, item: EvalItem) -> dict[str, Any]:
@@ -275,25 +273,10 @@ class DeterministicReleaseAdapter:
                 "answer_fact_ids": ["company", "title", "location", "description"],
             }
         try:
-            intent = payload.get("intent")
-            parameters = dict(payload.get("parameters", {}))
-
-            def action_provider(_message, _context, _settings):
-                proposal_payload = {"proposal_type": intent, **parameters}
-                if intent in {
-                    "save_job",
-                    "change_application_status",
-                    "create_application_event",
-                    "set_follow_up",
-                }:
-                    proposal_payload.setdefault("expected_status", "New")
-                return TypeAdapter(ActionProposal).validate_python(proposal_payload)
-
             proposal = propose_action(
                 str(payload["message"]),
                 context,
                 Settings(ai_explanations_enabled=False, openai_api_key=None),
-                provider_call=action_provider if intent else None,
             )
         except ActionProposalError as exc:
             action = "refuse" if "unavailable" in str(exc).casefold() else "clarify"
@@ -353,13 +336,13 @@ class DeterministicReleaseAdapter:
                     db.query(ApplicationEvent).count() + db.query(CopilotActionItem).count()
                 )
                 first = confirm_action(
-                    record.id, f"eval-{payload.get('case_id', intent)}", db, Settings()
+                    record.id, f"eval-{payload.get('case_id', 'action')}", db, Settings()
                 )
                 business_after_first = (
                     db.query(ApplicationEvent).count() + db.query(CopilotActionItem).count()
                 )
                 second = confirm_action(
-                    record.id, f"eval-{payload.get('case_id', intent)}", db, Settings()
+                    record.id, f"eval-{payload.get('case_id', 'action')}", db, Settings()
                 )
                 business_after_second = (
                     db.query(ApplicationEvent).count() + db.query(CopilotActionItem).count()

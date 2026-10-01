@@ -1,7 +1,8 @@
 import json
 import logging
+import re
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -14,8 +15,11 @@ from app.copilot.contracts import (
     ActionProposal,
     ChangeApplicationStatusProposal,
     CopilotMessageCreate,
+    CreateActionItemProposal,
+    CreateApplicationEventProposal,
     ModelActionProposal,
     SaveJobProposal,
+    SetFollowUpProposal,
 )
 from app.database.models import CopilotMessage, CopilotSession
 from app.schemas import ApplicationStatus
@@ -227,8 +231,65 @@ def propose_action(
 
         raise ActionProposalError("Select one job before proposing this action")
     current = ApplicationStatus(context.job.status)
-    if "save" in normalized:
-        return SaveJobProposal(target_id=context.job.id, expected_status=current)
+    event_match = re.search(
+        r"record an application event.*?status (?P<status>[^;]+);\s*"
+        r"occurred at (?P<occurred>[^;]+);\s*channel (?P<channel>[^;]+);\s*"
+        r"notes (?P<notes>.+)$",
+        message,
+        re.IGNORECASE,
+    )
+    if event_match is not None:
+        try:
+            return CreateApplicationEventProposal(
+                target_id=context.job.id,
+                expected_status=current,
+                status=ApplicationStatus(event_match.group("status").strip().title()),
+                occurred_at=datetime.fromisoformat(
+                    event_match.group("occurred").strip().replace("Z", "+00:00")
+                ),
+                channel=event_match.group("channel").strip(),
+                notes=event_match.group("notes").strip(),
+            )
+        except ValueError:
+            pass
+    follow_up_match = re.search(
+        r"set (?:the )?selected job follow-up to (?P<date>\d{4}-\d{2}-\d{2});\s*"
+        r"notes (?P<notes>.+)$",
+        message,
+        re.IGNORECASE,
+    )
+    if follow_up_match is not None:
+        try:
+            return SetFollowUpProposal(
+                target_id=context.job.id,
+                expected_status=current,
+                follow_up_date=date.fromisoformat(follow_up_match.group("date")),
+                notes=follow_up_match.group("notes").strip(),
+            )
+        except ValueError:
+            pass
+    action_item_match = re.search(
+        r"create (?:an? )?(?P<kind>learning|next_action) action item for selected job:\s*"
+        r"title (?P<title>[^;]+);(?:\s*details (?P<details>[^;]+);)?\s*"
+        r"due (?P<due>\d{4}-\d{2}-\d{2})\.?$",
+        message,
+        re.IGNORECASE,
+    )
+    if action_item_match is not None:
+        try:
+            return CreateActionItemProposal(
+                target_id=context.job.id,
+                item_kind=action_item_match.group("kind").casefold(),
+                title=action_item_match.group("title").strip(),
+                details=(
+                    action_item_match.group("details").strip()
+                    if action_item_match.group("details")
+                    else None
+                ),
+                due_date=date.fromisoformat(action_item_match.group("due")),
+            )
+        except ValueError:
+            pass
     requested_status = next(
         (status for status in ApplicationStatus if status.value.casefold() in normalized), None
     )
@@ -240,6 +301,8 @@ def propose_action(
             expected_status=current,
             status=requested_status,
         )
+    if re.search(r"\bsav(?:e|ing)\b", normalized):
+        return SaveJobProposal(target_id=context.job.id, expected_status=current)
     from app.copilot.actions import ActionProposalError
 
     raise ActionProposalError("Please clarify the exact allowed action and target")

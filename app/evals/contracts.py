@@ -111,10 +111,12 @@ class EvalItem(BaseModel):
                 if not isinstance(self.expected.get("forbidden_facts"), list):
                     errors.append("Copilot forbidden_facts are required for answers")
             elif self.suite == "copilot_normal":
-                if not isinstance(self.input.get("intent"), str):
-                    errors.append("Copilot action intent is required")
-                if not isinstance(self.input.get("parameters"), dict):
-                    errors.append("Copilot action parameters are required")
+                leaked_labels = sorted({"intent", "parameters"} & self.input.keys())
+                if leaked_labels:
+                    errors.append(
+                        "Copilot grader-only labels are forbidden in input: "
+                        + ", ".join(leaked_labels)
+                    )
                 if not isinstance(self.expected.get("parameters"), dict):
                     errors.append("Copilot expected parameters are required")
                 if not isinstance(self.expected.get("confirmed"), bool):
@@ -210,7 +212,7 @@ def load_dataset(path: Path, *, enforce_minimums: bool = True) -> EvalDataset:
             "set_follow_up",
             "create_action_item",
         }
-        observed_intents = {item.input.get("intent") for item in normal_actions}
+        observed_intents = {item.expected.get("action") for item in normal_actions}
         missing_intents = sorted(required_intents - observed_intents)
         if missing_intents:
             errors.append(f"Copilot action intents missing: {missing_intents}")

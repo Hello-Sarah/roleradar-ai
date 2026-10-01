@@ -85,7 +85,7 @@ jobs:
             --source "$EVIDENCE_DIR" --commit "$COMMIT" --environment "GitHub Actions ubuntu-latest"
           python scripts/build_acceptance_bundle.py \
             --source "$EVIDENCE_DIR" --output-root "${{ runner.temp }}/artifacts/acceptance" \
-            --version v1 --model-id deterministic-release-v5 --prompt-version none \
+            --version v1 --model-id deterministic-release-v6 --prompt-version none \
             --rubric-version eval-graders-v3 --dataset-version v1 \
             --browser-versions chromium=playwright-managed,webkit=playwright-managed \
             --node-version "$(node --version)"

@@ -348,8 +348,11 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         for check in [criterion["automated_check"], *criterion.get("additional_checks", [])]:
             if check["kind"] == "pytest":
                 classname, name = check["name"].split("::", 1)
-                for index in range(check.get("minimum_cases", 1)):
-                    suffix = f"[case-{index}]" if check.get("minimum_cases", 1) > 1 else ""
+                suffixes = check.get("required_case_ids")
+                if suffixes is None:
+                    count = check.get("minimum_cases", 1)
+                    suffixes = [f"[case-{index}]" for index in range(count)] if count > 1 else [""]
+                for suffix in suffixes:
                     ET.SubElement(suite, "testcase", classname=classname, name=name + suffix)
             if check["kind"] == "e2e":
                 e2e_checks.append(check["name"])
@@ -796,6 +799,28 @@ def test_release_gate_rejects_rehashed_junit_missing_each_clause_case(
     assert result.release_ready is False
     assert f"acceptance status does not match evidence: {acceptance_id}" in result.errors
     assert f"acceptance result does not match evidence: {acceptance_id}" in result.errors
+
+
+def test_release_gate_rejects_rehashed_duplicate_cv_traversal_cases(tmp_path: Path) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    junit = bundle / "automated-tests" / "pytest.xml"
+    tree = ET.parse(junit)
+    prefix = "test_download_endpoint_rejects_encoded_and_plain_separators"
+    matches = [
+        case
+        for case in tree.getroot().iter("testcase")
+        if case.get("classname") == "tests.test_cv_api" and str(case.get("name")).startswith(prefix)
+    ]
+    assert len(matches) == 6
+    for case in matches[1:]:
+        case.set("name", str(matches[0].get("name")))
+    tree.write(junit, encoding="unicode")
+    manifest["hashes"]["automated-tests/pytest.xml"] = _sha256(junit)
+
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+
+    assert result.release_ready is False
+    assert "acceptance status does not match evidence: CV-004" in result.errors
 
 
 @pytest.mark.parametrize(

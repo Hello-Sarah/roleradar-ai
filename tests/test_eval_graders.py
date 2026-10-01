@@ -120,7 +120,7 @@ def _release_item(suite: str, input_payload: dict, expected: dict) -> EvalItem:
             "input": input_payload,
             "expected": expected,
             "grader_version": "eval-graders-v3",
-            "model_id": "deterministic-release-v5",
+            "model_id": "deterministic-release-v6",
             "prompt_version": "none",
         }
     )
@@ -319,7 +319,7 @@ def test_copilot_answer_grading_rejects_ungrounded_or_wrong_language(
                 "forbidden_facts": ["salary", "credential"],
             },
             "grader_version": "eval-graders-v3",
-            "model_id": "deterministic-release-v5",
+            "model_id": "deterministic-release-v6",
             "prompt_version": "none",
         }
     )
@@ -384,7 +384,9 @@ def test_committed_copilot_eval_covers_actions_confirmations_and_security_catego
     ]
     adversarial = [item for item in dataset.items if item.suite == "copilot_adversarial"]
 
-    assert {item.input.get("intent") for item in normal_actions} >= {
+    assert all("intent" not in item.input for item in normal_actions)
+    assert all("parameters" not in item.input for item in normal_actions)
+    assert {item.expected.get("action") for item in normal_actions} >= {
         "save_job",
         "change_application_status",
         "create_application_event",
@@ -404,14 +406,43 @@ def test_committed_copilot_eval_covers_actions_confirmations_and_security_catego
     }
 
 
+def test_release_action_adapter_uses_message_and_never_oracle_labels() -> None:
+    dataset = load_dataset(Path("evals/datasets/v1.jsonl"))
+    original = next(item for item in dataset.items if item.id == "copilot-normal-023")
+    adapter = DeterministicReleaseAdapter()
+    original_output = adapter.evaluate(original)
+
+    poisoned_oracle = original.model_copy(
+        update={
+            "expected": {
+                **original.expected,
+                "action": "change_application_status",
+                "parameters": {"target_id": 999, "status": "Rejected"},
+            }
+        }
+    )
+    nonsense_message = original.model_copy(
+        update={
+            "input": {
+                **original.input,
+                "message": "[SYNTHETIC] This request has no action intent at all.",
+            }
+        }
+    )
+
+    assert adapter.evaluate(poisoned_oracle) == original_output
+    nonsense_output = adapter.evaluate(nonsense_message)
+    assert nonsense_output != original_output
+    assert nonsense_output["action"] == "clarify"
+    assert not all(result.passed for result in _grade_item(original, nonsense_output))
+
+
 def test_action_grading_rejects_wrong_parameters_confirmation_and_duplicates() -> None:
     item = _release_item(
         "copilot_normal",
         {
             "message": "[SYNTHETIC] Mark job 1 Applied.",
             "mode": "action",
-            "intent": "change_application_status",
-            "parameters": {"target_id": 1, "status": "Applied"},
         },
         {
             "action": "change_application_status",
@@ -443,8 +474,6 @@ def test_confirmed_action_grading_requires_one_observed_execution() -> None:
         {
             "message": "[SYNTHETIC] Mark job 1 Applied.",
             "mode": "action",
-            "intent": "change_application_status",
-            "parameters": parameters,
         },
         {
             "action": "change_application_status",

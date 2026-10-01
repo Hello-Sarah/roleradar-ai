@@ -286,7 +286,18 @@
         "name": "tests.test_cv_api::test_generate_response_and_download_preserve_the_intended_artifact"
       },
       "additional_checks": [
-        {"kind": "pytest", "name": "tests.test_cv_api::test_download_endpoint_rejects_encoded_and_plain_separators", "minimum_cases": 6},
+        {
+          "kind": "pytest",
+          "name": "tests.test_cv_api::test_download_endpoint_rejects_encoded_and_plain_separators",
+          "required_case_ids": [
+            "[..%2Foutside.docx]",
+            "[..%5Coutside.docx]",
+            "[nested%2Fcv.docx]",
+            "[nested/cv.docx]",
+            "[nested\\\\cv.docx]",
+            "[file%00.docx]"
+          ]
+        },
         {"kind": "pytest", "name": "tests.test_cv_api::test_download_rejects_symlink_escaping_output_directory"}
       ]
     },

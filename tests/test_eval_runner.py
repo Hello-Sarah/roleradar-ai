@@ -105,6 +105,34 @@ def test_dataset_rejects_candidate_output_hidden_at_any_input_depth(tmp_path: Pa
         load_dataset(supplied_output, enforce_minimums=False)
 
 
+def test_dataset_rejects_copilot_action_oracle_labels_in_input(tmp_path: Path) -> None:
+    leaked = tmp_path / "leaked-action-labels.jsonl"
+    _write(
+        leaked,
+        [
+            _item(
+                "leaked-action",
+                suite="copilot_normal",
+                input={
+                    "message": "[SYNTHETIC] Save the selected job.",
+                    "mode": "action",
+                    "intent": "save_job",
+                    "parameters": {"target_id": 1},
+                },
+                expected={
+                    "action": "save_job",
+                    "parameters": {"target_id": 1},
+                    "confirmed": False,
+                    "max_writes": 0,
+                },
+            )
+        ],
+    )
+
+    with pytest.raises(DatasetValidationError, match="grader-only labels"):
+        load_dataset(leaked, enforce_minimums=False)
+
+
 def test_dataset_requires_labels_ranges_redaction_and_valid_bilingual_pairs(tmp_path: Path) -> None:
     invalid = tmp_path / "invalid.jsonl"
     _write(
