@@ -12,7 +12,7 @@ artifacts remain in `.superpowers/sdd/2026-08-25-role-radar-v1/`.
 - Repository: `https://github.com/Hello-Sarah/roleradar-ai`
 - Active branch: `codex/roleradar-v1`
 - Persistent worktree: `/Users/shen/Documents/FDE Career Intelligence Agent/.worktrees/roleradar-v1`
-- Task 7 implementation head before verification: `6d5c7cb`
+- Independently verified Task 7 remote head: `806fc31`
 - Accepted Task 6 implementation and fix head: `128b4f9`
 - Stable demo through accepted Task 5: `f70f979`
 - Implementation plan: `docs/superpowers/plans/2026-08-25-role-radar-v1.md`
@@ -20,9 +20,10 @@ artifacts remain in `.superpowers/sdd/2026-08-25-role-radar-v1/`.
 
 ## Accepted scope
 
-Tasks 1–6 have passed independent task review. Tasks 1–5 cover the database
+Tasks 1–7 have passed independent task review. Tasks 1–5 cover the database
 foundation, bilingual message contracts, deterministic evidence-backed scoring, Watch List, and
-the evidence-grounded CV Library. Task 6 adds the confirmed-action Career Copilot described below.
+the evidence-grounded CV Library. Task 6 adds the confirmed-action Career Copilot, and Task 7 adds
+the bilingual Calm Intelligence workspace described below.
 
 Task 7's implementation and MVP hardening are complete. The 2026-09-30 verification mapped the
 delivered shell, all eight routes, editable/cancellable intake, stable widget keys, localized state
@@ -71,10 +72,61 @@ git diff --check
 clean
 ```
 
-`python -m pytest -q` could not be executed with its normal addopts in this container because the
-declared optional `pytest-cov` dependency was absent; `pip install -e '.[dev]'` could not download
-the Hatchling build dependency through the environment proxy. CI or the project virtual environment
-must rerun the unmodified command to independently confirm the repaired coverage report.
+Task 7 was subsequently independently verified locally and fast-forwarded to
+`origin/codex/roleradar-v1` at `806fc31`: plain `pytest` passed 261 tests with 85% total coverage,
+`ruff check .` passed, and `ruff format --check` passed.
+
+## Completed implementation: Task 8
+
+Task 8 makes Dashboard and Digest signals deterministic over persisted records:
+
+- Dashboard classifies the latest application event's follow-up as due today or overdue, excludes
+  future reminders and reminders resolved by a newer event without a date, and retains the linked
+  Job in every signal.
+- Dashboard selects exactly one next action, prioritizing the oldest overdue/due follow-up and then
+  the highest-ranked persisted V2 high-priority job.
+- High-priority Dashboard and Digest jobs now use the persisted `career-fit-v2` recommendation
+  bands `Must Apply` and `Strong Apply`; they do not guess priority from an ad-hoc score threshold.
+- Digest uses only persisted analyses/classifications inside its 24-hour window. Regression tests
+  fail if scoring or explanation/model code is invoked, exclude Selective and stale jobs, and prove
+  that every empty signal category remains explicit.
+- The Dashboard UI labels due and overdue follow-ups, links them to their stored Job, and avoids
+  duplicating a review-job next action in the remaining high-priority list.
+
+Task 8 followed red → green TDD. The initial focused run failed all three new tests because the
+clock-controlled service interfaces did not yet exist. Final verification:
+
+```text
+python -m pytest -q -o addopts='' tests/test_dashboard.py tests/test_digest.py
+4 passed
+
+python -m pytest -q -o addopts='' tests/test_dashboard.py tests/test_digest.py tests/test_api.py tests/test_dashboard_app.py
+50 passed
+
+python -m pytest -q -o addopts=''
+265 passed
+
+ruff check .
+All checks passed!
+
+ruff format --check app tests alembic
+91 files already formatted
+
+alembic heads
+20260825_05 (head)
+
+git diff --check
+clean
+```
+
+Plain `python -m pytest` was also attempted, but this container still lacks the declared optional
+`pytest-cov` plugin and rejected `--cov`; the full 265-test run therefore overrode only pytest's
+coverage addopts. This does not reopen Task 7's coverage result, which was independently verified at
+`806fc31` as recorded above.
+
+Two durable lessons from Task 8 are: reminder state belongs to the newest application event, so a
+newer event with no follow-up date must resolve an older reminder; and downstream decision surfaces
+must consume the stored version/band rather than silently reconstructing a score boundary.
 
 ## Completed review: Task 6
 
@@ -97,7 +149,6 @@ Important breakage. The implementer reported 31 focused and 189 full tests passi
 
 ## Remaining plan
 
-- Task 8: decision-first dashboard, daily digest, and weekly hiring trends.
 - Task 9: runnable versioned Eval harness and synthetic/redacted Golden Dataset.
 - Task 10: browser, accessibility, and immutable acceptance-evidence automation.
 - Task 11: release documentation, final acceptance, and portfolio handoff.
@@ -187,8 +238,8 @@ findings. Then update both the SDD ledger and this document, create a normal com
 1. Open this file and `.superpowers/sdd/2026-08-25-role-radar-v1/progress.md`.
 2. Confirm the active worktree, branch, `git status`, local HEAD, and remote branch hash.
 3. Do not re-dispatch Tasks 1–5; they are already accepted.
-4. Do not resume Tasks 1–7. Task 8, decision-first Dashboard and Digest signals, is the next
-   incomplete item in the approved V1 implementation plan.
+4. Do not resume Tasks 1–8. Task 9, the versioned Eval runner and Golden Dataset, is the next
+   incomplete item in the approved V1 implementation plan; do not start it without explicit scope.
 5. Never claim Task 9's Eval harness is built until its runner, dataset, graders, CI checks, and
    fresh evidence report exist and pass.
 6. After each accepted task, update this handoff, push GitHub, and verify the remote commit hash.

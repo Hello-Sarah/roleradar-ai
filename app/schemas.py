@@ -325,7 +325,15 @@ class TrendPoint(BaseModel):
 class DueFollowUpRead(BaseModel):
     job: JobRead
     next_follow_up_date: date
+    timing: Literal["due", "overdue"]
     notes: str | None = None
+
+
+class DashboardNextActionRead(BaseModel):
+    kind: Literal["follow_up", "review_job"]
+    job: JobRead
+    follow_up_timing: Literal["due", "overdue"] | None = None
+    next_follow_up_date: date | None = None
 
 
 class DashboardRead(BaseModel):
@@ -335,6 +343,7 @@ class DashboardRead(BaseModel):
     skill_gap_trends: list[tuple[str, int]]
     weekly_hiring_trends: list[TrendPoint]
     due_follow_ups: list[DueFollowUpRead]
+    next_action: DashboardNextActionRead | None
 
 
 class CVDocumentRead(BaseModel):

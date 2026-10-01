@@ -122,9 +122,16 @@ class DashboardClient(RecordingClient):
                     {
                         "job": job,
                         "next_follow_up_date": "2026-09-01",
+                        "timing": "overdue",
                         "notes": "Send hiring manager note",
                     }
                 ],
+                "next_action": {
+                    "kind": "follow_up",
+                    "job": job,
+                    "follow_up_timing": "overdue",
+                    "next_follow_up_date": "2026-09-01",
+                },
             }
         return super().get(path)
 
@@ -146,6 +153,7 @@ class ShellClient(DashboardClient):
                 "skill_gap_trends": [],
                 "weekly_hiring_trends": [],
                 "due_follow_ups": [],
+                "next_action": None,
             }
         if path == "/api/v1/jobs":
             return []
