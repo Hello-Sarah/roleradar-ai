@@ -1,6 +1,6 @@
 # RoleRadar AI — Engineering Handoff
 
-Last updated: 2026-09-03
+Last updated: 2026-09-30
 
 This is the recovery document for the active V1 implementation plan. It records what is safe,
 what is still under review, what failed previously, and the exact checks required before work is
@@ -12,7 +12,7 @@ artifacts remain in `.superpowers/sdd/2026-08-25-role-radar-v1/`.
 - Repository: `https://github.com/Hello-Sarah/roleradar-ai`
 - Active branch: `codex/roleradar-v1`
 - Persistent worktree: `/Users/shen/Documents/FDE Career Intelligence Agent/.worktrees/roleradar-v1`
-- WIP recovery checkpoint: `221233a`
+- Task 7 implementation head before verification: `6d5c7cb`
 - Accepted Task 6 implementation and fix head: `128b4f9`
 - Stable demo through accepted Task 5: `f70f979`
 - Implementation plan: `docs/superpowers/plans/2026-08-25-role-radar-v1.md`
@@ -23,6 +23,58 @@ artifacts remain in `.superpowers/sdd/2026-08-25-role-radar-v1/`.
 Tasks 1–6 have passed independent task review. Tasks 1–5 cover the database
 foundation, bilingual message contracts, deterministic evidence-backed scoring, Watch List, and
 the evidence-grounded CV Library. Task 6 adds the confirmed-action Career Copilot described below.
+
+Task 7's implementation and MVP hardening are complete. The 2026-09-30 verification mapped the
+delivered shell, all eight routes, editable/cancellable intake, stable widget keys, localized state
+copy, persistent locale selection, responsive Copilot confirmation, and API-only persistence to the
+Task 7 plan and its applicable I18N/UI/JOB/CHAT acceptance criteria. Component and Streamlit
+integration coverage exists for those contracts; the browser, screenshot, keyboard, and axe
+artifacts required for final V1 acceptance remain intentionally scheduled for Task 10.
+
+## Task 7 verification and coverage repair
+
+Verification from commit `6d5c7cb` found two test-infrastructure issues rather than a product-flow
+regression:
+
+1. Current supported Streamlit releases copy `AppTest.from_function` render helpers into standalone
+   temporary scripts. Runtime annotations referring to test-module fake client classes therefore
+   raised `NameError`, even though the helpers receive those clients through `args`. The render
+   helpers now omit those non-runtime annotations, restoring all 34 Streamlit integration tests on
+   Streamlit 1.64 while leaving production typing unchanged.
+2. pytest-cov was asked to resolve `app` itself through `--cov=app`. When collection/import order
+   made the package visible before coverage source resolution, pytest could pass while coverage.py
+   emitted module-not-measured/no-data diagnostics. Coverage source discovery now belongs to
+   coverage.py (`[tool.coverage.run] source = ["app"]`, with relative paths) and pytest-cov is
+   invoked with plain `--cov`. A configuration regression test protects this split.
+
+The container did not include pytest-cov and network package installation was blocked by the
+environment proxy, so the complete suite was run with only the unavailable coverage addopts
+overridden. Results and exact commands:
+
+```text
+python -m pytest -q -o addopts='' tests/test_dashboard_app.py
+34 passed
+
+python -m pytest -q -o addopts=''
+261 passed
+
+ruff check .
+All checks passed!
+
+ruff format --check app tests alembic
+89 files already formatted
+
+alembic heads
+20260825_05 (head)
+
+git diff --check
+clean
+```
+
+`python -m pytest -q` could not be executed with its normal addopts in this container because the
+declared optional `pytest-cov` dependency was absent; `pip install -e '.[dev]'` could not download
+the Hatchling build dependency through the environment proxy. CI or the project virtual environment
+must rerun the unmodified command to independently confirm the repaired coverage report.
 
 ## Completed review: Task 6
 
@@ -45,8 +97,6 @@ Important breakage. The implementer reported 31 focused and 189 full tests passi
 
 ## Remaining plan
 
-- Task 6: accepted; push the completion and handoff commits and verify the remote hash.
-- Task 7: bilingual Apple-style product UI and visible Copilot confirmation flow.
 - Task 8: decision-first dashboard, daily digest, and weekly hiring trends.
 - Task 9: runnable versioned Eval harness and synthetic/redacted Golden Dataset.
 - Task 10: browser, accessibility, and immutable acceptance-evidence automation.
@@ -137,8 +187,8 @@ findings. Then update both the SDD ledger and this document, create a normal com
 1. Open this file and `.superpowers/sdd/2026-08-25-role-radar-v1/progress.md`.
 2. Confirm the active worktree, branch, `git status`, local HEAD, and remote branch hash.
 3. Do not re-dispatch Tasks 1–5; they are already accepted.
-4. Do not resume Task 6; its scoped re-review is clean. Start Task 7 from the plan after verifying
-   the accepted Task 6 and handoff commits exist on the remote branch.
+4. Do not resume Tasks 1–7. Task 8, decision-first Dashboard and Digest signals, is the next
+   incomplete item in the approved V1 implementation plan.
 5. Never claim Task 9's Eval harness is built until its runner, dataset, graders, CI checks, and
    fresh evidence report exist and pass.
 6. After each accepted task, update this handoff, push GitHub, and verify the remote commit hash.
