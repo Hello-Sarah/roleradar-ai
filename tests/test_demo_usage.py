@@ -64,6 +64,23 @@ def test_settings_keep_the_public_demo_disabled_until_explicitly_enabled() -> No
     assert settings.trusted_proxy_cidrs == []
 
 
+def test_settings_reject_invalid_trusted_proxy_cidrs_at_startup() -> None:
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    with pytest.raises(ValidationError, match="trusted_proxy_cidrs"):
+        Settings(trusted_proxy_cidrs=["not-a-cidr"])
+
+
+def test_settings_canonicalize_mixed_ipv4_and_ipv6_trusted_proxy_cidrs() -> None:
+    from app.config import Settings
+
+    settings = Settings(trusted_proxy_cidrs=["10.1.2.3/8", "2001:db8::1/64"])
+
+    assert settings.trusted_proxy_cidrs == ["10.0.0.0/8", "2001:db8::/64"]
+
+
 def test_guard_rejects_input_larger_than_the_configured_character_limit() -> None:
     from app.demo.usage import DemoInputLimitError
 
@@ -194,12 +211,17 @@ def test_guard_retains_no_submitted_text_in_its_errors_or_state() -> None:
     assert secret not in repr(vars(guard))
 
 
-def test_guard_evicts_old_client_keys_when_its_retention_capacity_is_full() -> None:
-    guard = _guard(requests_per_minute=1, max_tracked_clients=2)
+def test_guard_fails_closed_without_evicting_active_client_limits_at_capacity() -> None:
+    from app.demo.usage import DemoRateLimitError
 
-    guard.check_request(_client("203.0.113.9"), input_length=1)
+    guard = _guard(requests_per_minute=1, max_tracked_clients=2)
+    client_a = _client("203.0.113.9")
+
+    guard.check_request(client_a, input_length=1)
     guard.check_request(_client("203.0.113.10"), input_length=1)
-    guard.check_request(_client("203.0.113.11"), input_length=1)
+    with pytest.raises(DemoRateLimitError, match="tracking capacity"):
+        guard.check_request(_client("203.0.113.11"), input_length=1)
 
     assert len(guard._requests_by_client) == 2
-    guard.check_request(_client("203.0.113.9"), input_length=1)
+    with pytest.raises(DemoRateLimitError, match="rate limit"):
+        guard.check_request(client_a, input_length=1)

@@ -162,7 +162,8 @@ class DemoUsageGuard:
             self._discard_expired_clients(now)
             requests = self._requests_by_client.get(client.address)
             if requests is None:
-                self._evict_for_new_client()
+                if len(self._requests_by_client) >= self._max_tracked_clients:
+                    raise DemoRateLimitError("demo request tracking capacity reached")
                 requests = deque()
                 self._requests_by_client[client.address] = requests
             else:
@@ -189,7 +190,3 @@ class DemoUsageGuard:
                 requests.popleft()
             if not requests:
                 del self._requests_by_client[address]
-
-    def _evict_for_new_client(self) -> None:
-        while len(self._requests_by_client) >= self._max_tracked_clients:
-            self._requests_by_client.popitem(last=False)

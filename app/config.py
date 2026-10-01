@@ -1,6 +1,7 @@
 from functools import lru_cache
+from ipaddress import ip_network
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +30,14 @@ class Settings(BaseSettings):
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:8501"])
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def canonicalize_trusted_proxy_cidrs(cls, cidrs: list[str]) -> list[str]:
+        try:
+            return [str(ip_network(cidr, strict=False)) for cidr in cidrs]
+        except ValueError as exc:
+            raise ValueError("trusted_proxy_cidrs must contain valid CIDR networks") from exc
 
 
 @lru_cache
