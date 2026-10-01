@@ -141,7 +141,9 @@ def _trusted_executable(name: str) -> Path:
         "eval": "python",
     }.get(name, name)
     if tool == "python":
-        return Path(sys.executable).resolve()
+        # Keep the virtualenv launcher path: resolving its symlink executes the base
+        # interpreter without the environment's installed dependencies.
+        return Path(sys.executable).absolute()
     if tool in {"ruff", "pytest"}:
         candidate = Path(sys.executable).absolute().parent / tool
         if candidate.is_file():

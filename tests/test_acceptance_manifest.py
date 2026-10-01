@@ -604,6 +604,7 @@ def test_release_gate_normalizes_the_approved_virtualenv_python_symlink(
     monkeypatch.setenv("PATH", f"{virtualenv_bin}:{os.environ['PATH']}")
     eval_command["executable"] = executable_identity("python", name="eval")
 
+    assert eval_command["executable"]["path"] == str(Path(sys.executable).absolute())
     result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
 
     assert result.release_ready is True
