@@ -17,6 +17,21 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
     st.title(translate(locale, "page.dashboard.title"))
     st.caption(translate(locale, "page.dashboard.support"))
     data = client.get("/api/v1/dashboard")
+    selected_action_item_id = st.session_state.get("ui.selected_action_item_id")
+    if selected_action_item_id is not None:
+        action_item = client.get(f"/api/v1/action-items/{selected_action_item_id}")
+        with st.container(border=True):
+            st.markdown(
+                f"**{translate(locale, 'copilot.record.action_item')} #{action_item['id']}**"
+            )
+            st.write(action_item["title"])
+            if action_item.get("details"):
+                st.write(action_item["details"])
+            if action_item.get("due_date"):
+                st.caption(
+                    f"{translate(locale, 'copilot.field.due_date')}: "
+                    f"{format_local_date(locale, action_item['due_date'])}"
+                )
     counts = data["status_counts"]
     metrics = st.columns(4)
     metric_specs = (

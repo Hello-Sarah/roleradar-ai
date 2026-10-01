@@ -37,12 +37,13 @@ from app.copilot.service import (
     propose_action,
     rename_session,
 )
-from app.database.models import CopilotActionProposal, GeneratedCV
+from app.database.models import CopilotActionItem, CopilotActionProposal, GeneratedCV
 from app.database.session import get_db
 from app.i18n.service import translate
 from app.ingestion.text_extractor import extract_job_from_text
 from app.ingestion.url_fetcher import JobPageFetchError, fetch_job_from_url
 from app.schemas import (
+    ActionItemRead,
     AnalysisRead,
     ApplicationEventCreate,
     ApplicationEventRead,
@@ -368,6 +369,22 @@ def create_tailored_cv(job_id: int, db: Db, settings: AppSettings) -> GeneratedC
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
+
+
+@router.get("/action-items/{action_item_id}", response_model=ActionItemRead)
+def read_action_item(action_item_id: int, db: Db) -> ActionItemRead:
+    item = db.get(CopilotActionItem, action_item_id)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Action item not found")
+    return ActionItemRead.model_validate(item)
+
+
+@router.get("/generated-cvs/{generated_cv_id}/metadata", response_model=GeneratedCVRead)
+def read_generated_cv(generated_cv_id: int, db: Db) -> GeneratedCVRead:
+    generated = db.get(GeneratedCV, generated_cv_id)
+    if generated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="CV not found")
+    return GeneratedCVRead.model_validate(generated)
 
 
 @router.get("/generated-cvs/{generated_cv_id}/{file_name:path}", response_class=FileResponse)

@@ -35,6 +35,40 @@ def test_full_job_workflow(client: TestClient) -> None:
     assert dashboard.json()["status_counts"]["Applied"] == 1
 
 
+def test_action_item_detail_returns_the_exact_durable_record(client: TestClient, db) -> None:
+    from datetime import date
+
+    from app.database.models import CopilotActionItem
+
+    item = CopilotActionItem(
+        job_id=None,
+        item_kind="next_action",
+        title="Follow up with the hiring team",
+        details="Send the architecture portfolio before Friday.",
+        due_date=date(2026, 10, 2),
+        completed=False,
+    )
+    db.add(item)
+    db.commit()
+
+    response = client.get(f"/api/v1/action-items/{item.id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.pop("created_at")
+    assert payload.pop("updated_at")
+    assert payload == {
+        "id": item.id,
+        "job_id": None,
+        "item_kind": "next_action",
+        "title": "Follow up with the hiring team",
+        "details": "Send the architecture portfolio before Friday.",
+        "due_date": "2026-10-02",
+        "completed": False,
+    }
+    assert client.get("/api/v1/action-items/99999").status_code == 404
+
+
 def test_application_record_timeline(client: TestClient) -> None:
     job = client.post("/api/v1/jobs", json={**JOB, "url": "https://example.com/jobs/record"}).json()
 

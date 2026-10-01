@@ -290,6 +290,40 @@ class DashboardToJobsClient(ShellClient):
         return super().get(path)
 
 
+class ResultDestinationClient(ShellClient):
+    def get(self, path: str) -> Any:
+        if path == "/api/v1/copilot/sessions":
+            return [{"id": 3, "title": "Career plan"}]
+        if path == "/api/v1/copilot/sessions/3/messages":
+            return []
+        if path == "/api/v1/action-items/31":
+            return {
+                "id": 31,
+                "job_id": 17,
+                "item_kind": "next_action",
+                "title": "Follow up with the hiring team",
+                "details": "Send the architecture portfolio before Friday.",
+                "due_date": "2026-10-02",
+                "completed": False,
+                "created_at": "2026-10-01T09:00:00Z",
+                "updated_at": "2026-10-01T09:00:00Z",
+            }
+        if path == "/api/v1/generated-cvs/6/metadata":
+            return {
+                "id": 6,
+                "job_id": 17,
+                "file_name": "Example AI—Applied AI Engineer-chatgpt.docx",
+                "file_path": "/tmp/generated/Example AI—Applied AI Engineer-chatgpt.docx",
+                "source_cv_ids": [2],
+                "source_cv_hashes": {"2": "abc123"},
+                "output_hash": "def456",
+                "model_version": "test-model",
+                "prompt_version": "tailored-cv-v1",
+                "generated_at": "2026-10-01T09:00:00Z",
+            }
+        return super().get(path)
+
+
 def _render_shell(client) -> None:
     from app.dashboard.streamlit_app import render_app
 
@@ -775,6 +809,51 @@ def test_copilot_success_identifies_each_durable_result_and_links_to_its_destina
     assert message in _rendered_text(app)
     app.button(key="copilot-view-result").click().run()
     assert app.session_state["ui.route"] == route
+
+
+def test_copilot_action_item_result_renders_the_exact_selected_record_on_dashboard() -> None:
+    client = ResultDestinationClient()
+    app = AppTest.from_function(_render_shell, args=(client,))
+    app.session_state["ui.locale"] = "en"
+    app.session_state["copilot.last_result"] = {
+        "proposal_type": "create_action_item",
+        "result_record_ids": {"action_item": [31]},
+    }
+    app.run()
+
+    app.button(key="desktop-copilot-view-result").click().run()
+    text = _rendered_text(app)
+
+    assert app.session_state["ui.route"] == "dashboard"
+    assert app.session_state["ui.selected_action_item_id"] == 31
+    assert "Action item #31" in text
+    assert "Follow up with the hiring team" in text
+    assert "Send the architecture portfolio before Friday." in text
+
+
+def test_copilot_generated_cv_result_renders_the_exact_selected_artifact_in_library() -> None:
+    client = ResultDestinationClient()
+    app = AppTest.from_function(_render_shell, args=(client,))
+    app.session_state["ui.locale"] = "en"
+    app.session_state["copilot.last_result"] = {
+        "proposal_type": "generate_tailored_cv",
+        "result_record_ids": {"job": [17], "generated_cv": [6]},
+    }
+    app.run()
+
+    app.button(key="desktop-copilot-view-result").click().run()
+    text = _rendered_text(app)
+
+    assert app.session_state["ui.route"] == "cv_library"
+    assert app.session_state["cv.selected_generated_id"] == 6
+    assert "Generated CV #6" in text
+    assert "Example AI—Applied AI Engineer-chatgpt.docx" in text
+    download = app.get("link_button")
+    assert len(download) == 1
+    assert download[0].proto.url == (
+        "http://test/api/v1/generated-cvs/6/"
+        "Example%20AI%E2%80%94Applied%20AI%20Engineer-chatgpt.docx"
+    )
 
 
 def test_cv_library_formats_visible_dates_for_chinese() -> None:

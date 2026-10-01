@@ -159,6 +159,46 @@ def test_generate_response_and_download_preserve_the_intended_artifact(
     assert quote(generated["file_name"], safe="") in response.headers["content-disposition"]
 
 
+def test_generated_cv_detail_returns_the_exact_durable_artifact(client, db, tmp_path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    artifact = output / "tailored.docx"
+    artifact.write_bytes(b"generated")
+    job = Job(
+        fingerprint="generated-cv-detail-job",
+        company="Example AI",
+        title="Applied AI Engineer",
+        location="Hong Kong",
+        description="Build reliable AI systems.",
+        source="manual",
+        status="Saved",
+    )
+    db.add(job)
+    db.flush()
+    generated = GeneratedCV(
+        job_id=job.id,
+        file_name=artifact.name,
+        file_path=str(artifact),
+        output_hash=hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        source_cv_ids=[2],
+        source_cv_hashes={"2": "abc123"},
+        model_version="test-model",
+        prompt_version="test-prompt",
+        generated_at=datetime(2026, 10, 1, tzinfo=UTC),
+    )
+    db.add(generated)
+    db.commit()
+
+    response = client.get(f"/api/v1/generated-cvs/{generated.id}/metadata")
+
+    assert response.status_code == 200
+    assert response.json()["id"] == generated.id
+    assert response.json()["job_id"] == job.id
+    assert response.json()["file_name"] == "tailored.docx"
+    assert response.json()["output_hash"] == hashlib.sha256(b"generated").hexdigest()
+    assert client.get("/api/v1/generated-cvs/99999/metadata").status_code == 404
+
+
 def test_download_rejects_missing_generated_artifact(client, tmp_path) -> None:
     client.app.dependency_overrides[get_settings] = lambda: Settings(
         generated_cv_path=str(tmp_path)

@@ -217,6 +217,7 @@
   "cv.file_type.pdf": "PDF 文档",
   "cv.file_type.txt": "文本文件",
   "cv.generated": "已生成：{file_name}",
+  "cv.generated_record": "生成的 CV #{generated_cv_id}",
   "cv.generated_path": "生成 CV 文件夹",
   "cv.generation_failed": "无法生成定制 CV，未写入任何输出文件。",
   "cv.library_path": "CV 库文件夹",

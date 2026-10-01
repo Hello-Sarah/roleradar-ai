@@ -217,6 +217,7 @@
   "cv.file_type.pdf": "PDF document",
   "cv.file_type.txt": "Text document",
   "cv.generated": "Generated: {file_name}",
+  "cv.generated_record": "Generated CV #{generated_cv_id}",
   "cv.generated_path": "Generated CV folder",
   "cv.generation_failed": "The tailored CV could not be generated. No output file was written.",
   "cv.library_path": "CV library folder",

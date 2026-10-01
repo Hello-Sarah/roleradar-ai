@@ -42,6 +42,20 @@ class ActionItemKind(StrEnum):
     NEXT_ACTION = "next_action"
 
 
+class ActionItemRead(BaseModel):
+    id: int
+    job_id: int | None
+    item_kind: ActionItemKind
+    title: str
+    details: str | None
+    due_date: date | None
+    completed: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class Recommendation(StrEnum):
     APPLY_NOW = "Apply Now"
     CONSIDER = "Consider"
@@ -380,3 +394,5 @@ class GeneratedCVRead(BaseModel):
     model_version: str
     prompt_version: str
     generated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

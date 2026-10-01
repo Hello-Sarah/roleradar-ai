@@ -375,6 +375,9 @@ def _render_last_result(locale: Locale, key_prefix: str) -> None:
             st.session_state.pop("ui.selected_company_id", None)
         if action_item_id is not None:
             st.session_state["ui.selected_action_item_id"] = action_item_id
+        if generated_cv_id is not None:
+            st.session_state["cv.selected_generated_id"] = generated_cv_id
+            st.session_state.pop("cv.generated", None)
         st.rerun()
 
 
