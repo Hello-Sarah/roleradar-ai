@@ -11,7 +11,7 @@ artifacts remain in `.superpowers/sdd/2026-08-25-role-radar-v1/`.
 
 - Repository: `https://github.com/Hello-Sarah/roleradar-ai`
 - Active branch: `codex/roleradar-v1`
-- Persistent worktree: `/Users/shen/Documents/FDE Career Intelligence Agent/.worktrees/roleradar-v1`
+- Persistent worktree: repository-managed `.worktrees/roleradar-v1`
 - Independently verified Task 7 remote head: `806fc31`
 - Independently verified Task 8 remote head: `ce268b3`
 - Accepted Task 6 implementation and fix head: `128b4f9`
