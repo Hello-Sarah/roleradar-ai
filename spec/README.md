@@ -7,7 +7,8 @@ Current specifications:
 
 - [`product.md`](product.md): product purpose, major workflows, and boundaries.
 - [`scoring-v2.md`](scoring-v2.md): version 2 AI Career Fit Score and flag rules.
-- [`watch-list-and-email.md`](watch-list-and-email.md): future Phase 2 monitoring and email ingestion.
+- [`watch-list-and-email.md`](watch-list-and-email.md): approved Phase 2 official-source monitoring
+  design, with Gmail ingestion explicitly deferred.
 - [`cv-library.md`](cv-library.md): private CV indexing and evidence-grounded tailoring.
 - [`release-v1.md`](release-v1.md): approved V1 scope, deliverables, dependencies, and exclusions.
 - [`design-system.md`](design-system.md): Calm Intelligence visual language and responsive behavior.
