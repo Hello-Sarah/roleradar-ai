@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import socket
 import subprocess
@@ -9,8 +11,10 @@ import sys
 import time
 from collections.abc import Generator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -61,6 +65,52 @@ class ScreenshotPath:
 
     def localized_route(self, route: str) -> str:
         return self._ZH_ROUTES[route]
+
+    def capture(self, page: Page, group: str, name: str) -> None:
+        from scripts.evidence_identity import SCREENSHOT_LEDGER, SYSTEM_HEADINGS, png_identity
+
+        observed_locale = parse_qs(urlparse(page.url).query).get("lang", [""])[0]
+        headings = page.locator("h1:visible").all_text_contents()
+        heading = next(text for text in headings if text in SYSTEM_HEADINGS[observed_locale])
+        route = SYSTEM_HEADINGS[observed_locale][heading]
+        state = "page"
+        if (
+            page.get_by_text("temporarily unavailable", exact=False).count()
+            or page.get_by_text("暂时不可用", exact=False).count()
+        ):
+            state = "error"
+        elif (
+            page.get_by_text("Review this proposed action", exact=False).count()
+            or page.get_by_text("请先检查拟议操作", exact=False).count()
+        ):
+            state = "confirmation"
+        elif page.get_by_role("dialog").count():
+            state = "copilot"
+        destination = self(group, name)
+        page.screenshot(path=destination, full_page=True)
+        width, height, pixels = png_identity(destination)
+        record = {
+            "path": str(destination.relative_to(self.root)),
+            "browser": page.context.browser.browser_type.name,
+            "locale": observed_locale,
+            "route": route,
+            "state": state,
+            "heading": heading,
+            "viewport": page.viewport_size,
+            "dimensions": [width, height],
+            "pixel_hash": pixels,
+            "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+            "commit": os.getenv("ROLERADAR_EVIDENCE_COMMIT"),
+            "run_id": os.getenv("ROLERADAR_EVIDENCE_RUN_ID"),
+            "captured_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        }
+        ledger = self.root / SCREENSHOT_LEDGER
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        records = json.loads(ledger.read_text()) if ledger.exists() else []
+        if any(previous["path"] == record["path"] for previous in records):
+            raise AssertionError("duplicate screenshot capture slot")
+        records.append(record)
+        ledger.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n")
 
 
 def _free_port() -> int:

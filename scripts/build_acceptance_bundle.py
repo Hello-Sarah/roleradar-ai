@@ -11,17 +11,26 @@ import platform
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+import zlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
 from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any
-from zipfile import BadZipFile, ZipFile
+
+from scripts.evidence_identity import (
+    SCREENSHOT_LEDGER,
+    SCREENSHOT_STATES,
+    SYSTEM_HEADINGS,
+    png_identity,
+    trace_identity,
+)
 
 REQUIRED_COMMANDS = ("ruff", "format", "pytest", "e2e", "accessibility", "eval")
 REQUIRED_TRACE_WORKFLOWS = {
@@ -44,7 +53,35 @@ COMMAND_OUTPUTS = {
         "automated-tests/pytest.xml",
         "automated-tests/coverage.xml",
     ),
-    "e2e": ("automated-tests/e2e-results.json", *REQUIRED_TRACE_PATHS),
+    "e2e": (
+        "automated-tests/e2e-results.json",
+        *REQUIRED_TRACE_PATHS,
+        SCREENSHOT_LEDGER,
+        *(
+            f"screenshots/{group}/{browser}-{name}.png"
+            for group, names in {
+                "en": (
+                    "dashboard",
+                    "job-detail",
+                    "watch-list",
+                    "cv-library",
+                    "copilot-confirmation",
+                    "error",
+                ),
+                "zh": (
+                    "dashboard",
+                    "job-detail",
+                    "watch-list",
+                    "cv-library",
+                    "copilot-confirmation",
+                    "error",
+                ),
+                "narrow": ("dashboard", "job-detail", "copilot"),
+            }.items()
+            for browser in ("chromium", "webkit")
+            for name in names
+        ),
+    ),
     "accessibility": (
         "automated-tests/accessibility-command.txt",
         "automated-tests/accessibility.json",
@@ -317,37 +354,6 @@ def _allowed_evidence_file(relative_name: str) -> bool:
     return False
 
 
-def _valid_flow_trace(path: Path, browser: str, test_name: str) -> bool:
-    """Require replayable Playwright events from the named browser and workflow."""
-    try:
-        with ZipFile(path) as archive:
-            streams = [entry for entry in archive.infolist() if entry.filename.endswith(".trace")]
-            if not streams or sum(entry.file_size for entry in streams) > 100_000_000:
-                return False
-            events = [
-                json.loads(line)
-                for entry in streams
-                for line in archive.read(entry).decode("utf-8").splitlines()
-                if line
-            ]
-        contexts = [event for event in events if event.get("type") == "context-options"]
-        before = {event.get("callId") for event in events if event.get("type") == "before"}
-        after = {event.get("callId") for event in events if event.get("type") == "after"}
-        return bool(before & after) and any(
-            event.get("browserName") == browser and test_name in event.get("title", "")
-            for event in contexts
-        )
-    except (
-        OSError,
-        BadZipFile,
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-        AttributeError,
-        TypeError,
-    ):
-        return False
-
-
 def validate_release_manifest(
     manifest: dict[str, Any],
     bundle_dir: Path,
@@ -479,6 +485,19 @@ def validate_release_manifest(
         for relative_name in expected_artifacts:
             if not (bundle_dir / relative_name).is_file():
                 errors.append(f"missing command artifact: {name}: {relative_name}")
+        digest_paths = expected_artifacts - (
+            {str(command.get("output"))} if str(command.get("output")).endswith(".json") else set()
+        )
+        recorded_hashes = command.get("artifact_hashes")
+        if not isinstance(recorded_hashes, dict) or set(recorded_hashes) != digest_paths:
+            errors.append(f"missing command completion artifact digests: {name}")
+        else:
+            for relative_name in digest_paths:
+                path = bundle_dir / relative_name
+                if path.is_file() and recorded_hashes[relative_name] != _sha256(path):
+                    errors.append(
+                        f"artifact changed after command completion: {name}: {relative_name}"
+                    )
 
     for group, required_names in REQUIRED_SCREENSHOTS.items():
         screenshot_names = [path.name for path in _screenshot_files(bundle_dir, group)]
@@ -488,11 +507,68 @@ def validate_release_manifest(
                 if expected_name not in screenshot_names:
                     errors.append(f"missing screenshot evidence: {group}/{expected_name}")
 
+    trace_contents: set[str] = set()
+    e2e = command_by_name.get("e2e", {})
+    trace_start, trace_end = _parse_utc(e2e.get("started_at")), _parse_utc(e2e.get("ended_at"))
+    interval = (
+        (trace_start.timestamp(), trace_end.timestamp()) if trace_start and trace_end else (0, 0)
+    )
     for browser in ("chromium", "webkit"):
         for workflow, test_name in REQUIRED_TRACE_WORKFLOWS.items():
             relative = f"browser-results/traces/{browser}-{workflow}.zip"
-            if not _valid_flow_trace(bundle_dir / relative, browser, test_name):
+            try:
+                content = trace_identity(bundle_dir / relative, browser, test_name, interval)
+                if content in trace_contents:
+                    raise ValueError("duplicate trace content")
+                trace_contents.add(content)
+            except ValueError:
                 errors.append(f"missing or invalid trace evidence: {relative}")
+
+    try:
+        captures = _load_json(bundle_dir / SCREENSHOT_LEDGER)
+        expected_slots = {path for path in COMMAND_OUTPUTS["e2e"] if path.endswith(".png")}
+        if (
+            not isinstance(captures, list)
+            or {capture["path"] for capture in captures} != expected_slots
+            or len(captures) != len(expected_slots)
+        ):
+            raise ValueError("missing/duplicate capture slots")
+        seen_images: set[str] = set()
+        for capture in captures:
+            relative = capture["path"]
+            group, filename = Path(relative).parts[1:]
+            browser, slug = filename.removesuffix(".png").split("-", 1)
+            locale = "zh-Hans" if group == "zh" else "en"
+            viewport = (
+                {"width": 390, "height": 844}
+                if group == "narrow"
+                else {"width": 1440, "height": 1100}
+            )
+            route, state = SCREENSHOT_STATES[slug]
+            width, height, pixels = png_identity(bundle_dir / relative)
+            if (
+                capture.get("browser") != browser
+                or capture.get("locale") != locale
+                or capture.get("route") != route
+                or capture.get("state") != state
+                or SYSTEM_HEADINGS[locale].get(capture.get("heading")) != route
+                or capture.get("viewport") != viewport
+                or width != viewport["width"]
+                or height < viewport["height"]
+                or capture.get("dimensions") != [width, height]
+                or capture.get("pixel_hash") != pixels
+                or capture.get("sha256") != _sha256(bundle_dir / relative)
+                or capture.get("commit") != expected_commit
+                or capture.get("run_id") != e2e.get("started_at")
+                or not interval[0]
+                <= (_parse_utc(capture.get("captured_at")).timestamp())
+                <= interval[1]
+                or pixels in seen_images
+            ):
+                raise ValueError(f"substituted/duplicate screenshot: {relative}")
+            seen_images.add(pixels)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, struct.error, zlib.error):
+        errors.append("missing or invalid screenshot identity evidence")
 
     eval_path = bundle_dir / "automated-tests" / "eval-summary.json"
     if not eval_path.is_file():
@@ -1000,9 +1076,15 @@ def _criterion_check_result(
             evidence,
         )
     failed = sum(any(child.tag in {"failure", "error"} for child in list(case)) for case in matches)
+    skipped = sum(
+        any(child.tag == "skipped" for child in list(case))
+        or case.get("status") in {"notrun", "skipped", "disabled"}
+        for case in matches
+    )
     return (
-        "Pass" if failed == 0 else "Fail",
-        f"{acceptance_id} named pytest check {check_name}: cases={len(matches)}, failed={failed}",
+        "Fail" if failed else ("Blocked" if skipped else "Pass"),
+        f"{acceptance_id} named pytest check {check_name}: cases={len(matches)}, "
+        f"failed={failed}, skipped={skipped}",
         evidence,
     )
 
@@ -1143,8 +1225,10 @@ def record_command(
         resolved_executable = _resolve_requested_executable(command[0])
     executed_command = [str(resolved_executable), *command[1:]]
     started_at = _utc_now()
+    command_env = os.environ.copy()
+    command_env.update(ROLERADAR_EVIDENCE_COMMIT=commit, ROLERADAR_EVIDENCE_RUN_ID=started_at)
     completed = subprocess.run(
-        executed_command, cwd=cwd, capture_output=True, text=True, check=False
+        executed_command, cwd=cwd, capture_output=True, text=True, check=False, env=command_env
     )
     ended_at = _utc_now()
     result: dict[str, Any] = {
@@ -1173,6 +1257,16 @@ def record_command(
         )
     else:
         output_path.write_text(completed.stdout + completed.stderr, encoding="utf-8")
+    digest_paths = set(result["artifacts"]) - (
+        {str(output_relative)} if output_path.suffix == ".json" else set()
+    )
+    result["artifact_hashes"] = {
+        relative: _sha256(source / relative)
+        for relative in sorted(digest_paths)
+        if (source / relative).is_file()
+    }
+    if output_path.suffix == ".json":
+        output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     results_path = source / "command-results.json"
     results = _load_json(results_path) if results_path.is_file() else []
     if not isinstance(results, list):

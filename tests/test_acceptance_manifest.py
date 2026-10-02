@@ -2,10 +2,13 @@ import copy
 import hashlib
 import json
 import os
+import struct
 import subprocess
 import sys
 import tomllib
 import xml.etree.ElementTree as ET
+import zlib
+from datetime import datetime
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -18,10 +21,233 @@ from scripts.build_acceptance_bundle import (
     validate_release_manifest,
     write_acceptance_results,
 )
+from scripts.evidence_identity import (
+    SCREENSHOT_LEDGER,
+    SCREENSHOT_STATES,
+    SYSTEM_HEADINGS,
+    png_identity,
+)
 
 FULL_COMMIT = "1" * 40
 STARTED_AT = "2026-10-01T10:00:00Z"
 ENDED_AT = "2026-10-01T10:06:00Z"
+
+
+def _refresh_command_hashes(bundle: Path, manifest: dict) -> None:
+    """Remove digest mismatch as a confounder when testing semantic rejection."""
+    for command in manifest["commands"]:
+        command["artifact_hashes"] = {
+            relative: _sha256(bundle / relative)
+            for relative in command["artifacts"]
+            if (bundle / relative).is_file()
+            and (relative != command["output"] or not relative.endswith(".json"))
+        }
+    browser = next(command for command in manifest["commands"] if command["name"] == "e2e")
+    (bundle / "automated-tests/e2e-results.json").write_text(json.dumps(browser))
+    (bundle / "command-results.json").write_text(json.dumps(manifest["commands"]))
+    for path in bundle.rglob("*"):
+        if path.is_file():
+            manifest["hashes"][str(path.relative_to(bundle))] = _sha256(path)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("browser", "chromium"),
+        ("locale", "en"),
+        ("route", "dashboard"),
+        ("state", "confirmation"),
+        ("viewport", {"width": 390, "height": 844}),
+    ],
+)
+def test_capture_metadata_cannot_substitute_another_identity(tmp_path: Path, field, value) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    ledger = bundle / SCREENSHOT_LEDGER
+    records = json.loads(ledger.read_text())
+    record = next(
+        record for record in records if record["path"] == "screenshots/zh/webkit-watch-list.png"
+    )
+    record[field] = value
+    ledger.write_text(json.dumps(records))
+    _refresh_command_hashes(bundle, manifest)
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+    assert "missing or invalid screenshot identity evidence" in result.errors
+
+
+def test_rehashing_after_capture_does_not_hide_artifact_substitution(tmp_path: Path) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    path = bundle / "screenshots/zh/webkit-watch-list.png"
+    path.write_bytes((bundle / "screenshots/en/chromium-dashboard.png").read_bytes())
+    manifest["hashes"][str(path.relative_to(bundle))] = _sha256(path)
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+    assert any("artifact changed after command completion: e2e" in error for error in result.errors)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "wrong_viewport",
+        "missing_snapshot",
+        "missing_resource",
+        "missing_checkpoint",
+        "malformed_json",
+    ],
+)
+def test_trace_semantic_checks_are_independent_of_manifest_rehash(tmp_path: Path, mutation) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    path = bundle / "browser-results/traces/chromium-desktop-primary-loop.zip"
+    with ZipFile(path) as archive:
+        entries = {name: archive.read(name) for name in archive.namelist()}
+    events = [json.loads(line) for line in entries["trace.trace"].decode().splitlines()]
+    if mutation == "wrong_viewport":
+        events[0]["options"]["viewport"] = {"width": 390, "height": 844}
+    elif mutation == "missing_snapshot":
+        events = [event for event in events if event["type"] != "frame-snapshot"]
+    elif mutation == "missing_resource":
+        entries = {
+            name: data for name, data in entries.items() if not name.startswith("resources/")
+        }
+    elif mutation == "missing_checkpoint":
+        for event in events:
+            if event.get("method") == "click" and "Generate tailored CV" in str(
+                event.get("params")
+            ):
+                event["params"] = {"selector": "another control"}
+    entries["trace.trace"] = "\n".join(json.dumps(event) for event in events).encode()
+    if mutation == "malformed_json":
+        entries["trace.trace"] += b"\n{broken"
+    with ZipFile(path, "w") as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    _refresh_command_hashes(bundle, manifest)
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+    assert any("trace evidence" in error for error in result.errors)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["failed_action", "minimal", "missing_call_id", "truncated", "no_resources", "duplicate"],
+)
+def test_review_rejects_failed_incomplete_or_duplicate_trace(tmp_path: Path, mutation: str) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    relative = "browser-results/traces/chromium-desktop-primary-loop.zip"
+    path = bundle / relative
+    with ZipFile(path) as archive:
+        entries = {name: archive.read(name) for name in archive.namelist()}
+    events = [json.loads(line) for line in entries["trace.trace"].decode().splitlines()]
+    if mutation == "failed_action":
+        next(event for event in events if event["type"] == "after")["error"] = {"message": "failed"}
+    elif mutation == "missing_call_id":
+        for event in events:
+            event.pop("callId", None)
+    elif mutation == "truncated":
+        events.append({"type": "before", "callId": "unfinished", "method": "click"})
+    elif mutation == "minimal":
+        events = [
+            events[0],
+            {"type": "before", "callId": "x", "method": "goto"},
+            {"type": "after", "callId": "x"},
+        ]
+    elif mutation == "no_resources":
+        entries = {"trace.trace": entries["trace.trace"]}
+    elif mutation == "duplicate":
+        events = [
+            {"type": "context-options", "browserName": browser, "title": test}
+            for browser in ("chromium", "webkit")
+            for test in acceptance_bundle.REQUIRED_TRACE_WORKFLOWS.values()
+        ] + [{"type": "before", "callId": "x", "method": "goto"}, {"type": "after", "callId": "x"}]
+    entries["trace.trace"] = "\n".join(json.dumps(event) for event in events).encode()
+    with ZipFile(path, "w") as archive:
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    if mutation == "duplicate":
+        for other in acceptance_bundle.REQUIRED_TRACE_PATHS:
+            (bundle / other).write_bytes(path.read_bytes())
+            manifest["hashes"][other] = _sha256(bundle / other)
+    manifest["hashes"][relative] = _sha256(path)
+    _refresh_command_hashes(bundle, manifest)
+    assert not validate_release_manifest(
+        manifest, bundle, expected_commit=FULL_COMMIT
+    ).release_ready
+
+
+@pytest.mark.parametrize("message", ["not executed", "xfail"])
+@pytest.mark.parametrize("parameterized", [False, True])
+def test_review_required_junit_skip_blocks_generated_ledger_and_gate(
+    tmp_path: Path, message: str, parameterized: bool
+) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    report = bundle / "automated-tests/pytest.xml"
+    tree = ET.parse(report)
+    name = (
+        "test_download_endpoint_rejects_encoded_and_plain_separators"
+        if parameterized
+        else "test_catalogs_have_identical_keys"
+    )
+    case = next(case for case in tree.iter("testcase") if case.get("name", "").startswith(name))
+    ET.SubElement(case, "skipped", message=message)
+    tree.write(report, encoding="unicode")
+    manifest["hashes"]["automated-tests/pytest.xml"] = _sha256(report)
+    _refresh_command_hashes(bundle, manifest)
+    assert not validate_release_manifest(
+        manifest, bundle, expected_commit=FULL_COMMIT
+    ).release_ready
+    ledger = json.loads(
+        write_acceptance_results(
+            source=bundle, commit=FULL_COMMIT, environment="test-os"
+        ).read_text()
+    )
+    criterion = "CV-004" if parameterized else "I18N-003"
+    assert next(item for item in ledger if item["id"] == criterion)["status"] != "Pass"
+
+
+@pytest.mark.parametrize("mutation", ["invalid_png", "wrong_route", "wrong_language", "duplicate"])
+def test_review_rejects_screenshot_substitution(tmp_path: Path, mutation: str) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    relative = "screenshots/zh/webkit-watch-list.png"
+    path = bundle / relative
+    if mutation == "invalid_png":
+        path.write_bytes(b"not a PNG")
+    else:
+        source = {
+            "wrong_route": "screenshots/zh/webkit-dashboard.png",
+            "wrong_language": "screenshots/en/webkit-watch-list.png",
+            "duplicate": "screenshots/en/chromium-dashboard.png",
+        }[mutation]
+        path.write_bytes((bundle / source).read_bytes())
+    manifest["hashes"][relative] = _sha256(path)
+    if mutation != "invalid_png":
+        ledger = bundle / SCREENSHOT_LEDGER
+        records = json.loads(ledger.read_text())
+        target = next(record for record in records if record["path"] == relative)
+        origin = next(record for record in records if record["path"] == source)
+        if mutation == "duplicate":
+            target.update(sha256=origin["sha256"], pixel_hash=origin["pixel_hash"])
+        else:
+            target.update(origin)
+            target["path"] = relative
+        ledger.write_text(json.dumps(records))
+    _refresh_command_hashes(bundle, manifest)
+    assert not validate_release_manifest(
+        manifest, bundle, expected_commit=FULL_COMMIT
+    ).release_ready
+
+
+@pytest.mark.parametrize("status", ["notrun", "disabled", "skipped"])
+def test_required_junit_not_run_status_blocks_acceptance(tmp_path: Path, status: str) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    report = bundle / "automated-tests/pytest.xml"
+    tree = ET.parse(report)
+    case = next(
+        case
+        for case in tree.iter("testcase")
+        if case.get("name") == "test_catalogs_have_identical_keys"
+    )
+    case.set("status", status)
+    tree.write(report, encoding="unicode")
+    _refresh_command_hashes(bundle, manifest)
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+    assert "acceptance status does not match evidence: I18N-003" in result.errors
 
 
 def test_generated_summary_records_nonblocking_p2_reproduction_and_evidence(tmp_path: Path) -> None:
@@ -115,18 +341,57 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         ),
         "narrow": ("dashboard", "job-detail", "copilot"),
     }
+    captures = []
     for locale, names in screenshot_names.items():
         (screenshots / locale).mkdir(parents=True, exist_ok=True)
         for browser in ("chromium", "webkit"):
             for name in names:
-                (screenshots / locale / f"{browser}-{name}.png").write_bytes(
-                    b"synthetic-redacted-image"
+                path = screenshots / locale / f"{browser}-{name}.png"
+                width, height = (390, 844) if locale == "narrow" else (1440, 1100)
+
+                def chunk(kind, payload):
+                    return (
+                        struct.pack("!I", len(payload))
+                        + kind
+                        + payload
+                        + struct.pack("!I", zlib.crc32(kind + payload))
+                    )
+
+                color = bytes([len(captures) + 1, 120, 220])
+                path.write_bytes(
+                    b"\x89PNG\r\n\x1a\n"
+                    + chunk(b"IHDR", struct.pack("!IIBBBBB", width, height, 8, 2, 0, 0, 0))
+                    + chunk(b"IDAT", zlib.compress((b"\0" + color * width) * height))
+                    + chunk(b"IEND", b"")
+                )
+                language = "zh-Hans" if locale == "zh" else "en"
+                route, state = SCREENSHOT_STATES[name]
+                heading = next(
+                    text for text, key in SYSTEM_HEADINGS[language].items() if key == route
+                )
+                captures.append(
+                    {
+                        "path": str(path.relative_to(bundle)),
+                        "browser": browser,
+                        "locale": language,
+                        "route": route,
+                        "state": state,
+                        "heading": heading,
+                        "viewport": {"width": width, "height": height},
+                        "dimensions": [width, height],
+                        "pixel_hash": png_identity(path)[2],
+                        "sha256": _sha256(path),
+                        "commit": FULL_COMMIT,
+                        "run_id": "2026-10-01T10:03:00Z",
+                        "captured_at": "2026-10-01T10:03:10Z",
+                    }
                 )
     automated.mkdir(parents=True)
     traces = bundle / "browser-results" / "traces"
     traces.mkdir(parents=True)
+    trace_fixtures = json.loads(Path("tests/fixtures/acceptance/trace-cases.json").read_text())
     for browser in ("chromium", "webkit"):
-        for workflow, test_name in {
+        for workflow, _test_name in {
             "desktop-primary-loop": "test_pasted_job_to_application_watchlist_and_tailored_cv",
             "narrow-primary-loop": "test_primary_loop_and_copilot_are_non_blocking_at_390px",
             "copilot-confirmation": (
@@ -134,17 +399,19 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             ),
         }.items():
             with ZipFile(traces / f"{browser}-{workflow}.zip", "w") as trace:
-                trace.writestr(
-                    "trace.trace",
-                    "\n".join(
-                        json.dumps(event)
-                        for event in (
-                            {"type": "context-options", "browserName": browser, "title": test_name},
-                            {"type": "before", "method": "goto", "callId": "call@1"},
-                            {"type": "after", "callId": "call@1"},
-                        )
-                    ),
+                fixture = trace_fixtures[f"{browser}-{workflow}"]
+                fixture["events"][0]["wallTime"] = int(
+                    datetime.fromisoformat("2026-10-01T10:03:05+00:00").timestamp() * 1000
                 )
+                trace.writestr(
+                    "trace.trace", "\n".join(json.dumps(event) for event in fixture["events"])
+                )
+                trace.writestr(
+                    "trace.network", "\n".join(json.dumps(event) for event in fixture["network"])
+                )
+                for resource, text in fixture["resources"].items():
+                    trace.writestr(resource, text)
+    (bundle / SCREENSHOT_LEDGER).write_text(json.dumps(captures))
     (automated / "eval-summary.json").write_text(
         json.dumps(
             {
@@ -335,7 +602,7 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             "e2e",
             "pytest tests/e2e --browser chromium --browser webkit --tracing retain-on-failure "
             "--output=/tmp/bundle/browser-results",
-            ("automated-tests/e2e-results.json", *acceptance_bundle.REQUIRED_TRACE_PATHS),
+            acceptance_bundle.COMMAND_OUTPUTS["e2e"],
         ),
         (
             "accessibility",
@@ -437,6 +704,12 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     browser_result["stdout"] = "\n".join(
         f"{check}[{browser}] PASSED" for check in e2e_checks for browser in ("chromium", "webkit")
     )
+    for command in commands:
+        command["artifact_hashes"] = {
+            relative: _sha256(bundle / relative)
+            for relative in command["artifacts"]
+            if relative != command["output"] or not relative.endswith(".json")
+        }
     (automated / "e2e-results.json").write_text(json.dumps(browser_result), encoding="utf-8")
     (bundle / "command-results.json").write_text(json.dumps(commands), encoding="utf-8")
     acceptance_path = write_acceptance_results(

@@ -35,11 +35,11 @@ def test_copilot_requires_keyboard_reachable_confirmation_before_write(
     ):
         expect(page.get_by_text(label, exact=True).last).to_be_visible()
     assert api_client.get("/api/v1/jobs").json()[0]["status"] == "New"
-    page.screenshot(path=screenshot_path("en", "copilot-confirmation.png"), full_page=True)
+    screenshot_path.capture(page, "en", "copilot-confirmation.png")
 
     page.get_by_text("中文", exact=True).click()
     expect(page.get_by_text("目标记录", exact=True).last).to_be_visible()
-    page.screenshot(path=screenshot_path("zh", "copilot-confirmation.png"), full_page=True)
+    screenshot_path.capture(page, "zh", "copilot-confirmation.png")
     page.get_by_text("EN", exact=True).click()
 
     page.get_by_role("button", name="Confirm action").last.focus()

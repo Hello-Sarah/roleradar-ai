@@ -60,7 +60,7 @@ def test_bilingual_visual_routes_use_identical_redacted_seed(
         _assert_top_utility_clear_of_toolbar(page)
         context_prefix = "Current context" if locale == "en" else "当前上下文"
         expect(page.get_by_text(f"{context_prefix}: {localized_route}", exact=True)).to_be_visible()
-        page.screenshot(path=screenshot_path(locale, f"{slug}.png"), full_page=True)
+        screenshot_path.capture(page, locale, f"{slug}.png")
 
 
 def test_narrow_visuals_have_no_horizontal_overflow(
@@ -83,14 +83,14 @@ def test_narrow_visuals_have_no_horizontal_overflow(
             page.get_by_test_id("stSidebarCollapseButton").click()
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         _assert_top_utility_clear_of_toolbar(page)
-        page.screenshot(path=screenshot_path("narrow", f"{slug}.png"), full_page=True)
+        screenshot_path.capture(page, "narrow", f"{slug}.png")
     page.get_by_role("button", name="Open Career Copilot").first.click()
     expect(page.get_by_role("dialog")).to_be_visible()
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
     dialog_bounds = page.get_by_role("dialog").bounding_box()
     assert dialog_bounds is not None and dialog_bounds["width"] >= 388
     _assert_material_icons_render(page)
-    page.screenshot(path=screenshot_path("narrow", "copilot.png"), full_page=True)
+    screenshot_path.capture(page, "narrow", "copilot.png")
 
 
 @pytest.mark.parametrize(
@@ -150,7 +150,7 @@ def test_bilingual_error_state_is_captured(
 ) -> None:
     page = unavailable_page
     expect(page.get_by_text("temporarily unavailable", exact=False).first).to_be_visible()
-    page.screenshot(path=screenshot_path("en", "error.png"), full_page=True)
+    screenshot_path.capture(page, "en", "error.png")
     page.get_by_text("中文", exact=True).click()
     expect(page.get_by_text("暂时不可用", exact=False).first).to_be_visible()
-    page.screenshot(path=screenshot_path("zh", "error.png"), full_page=True)
+    screenshot_path.capture(page, "zh", "error.png")

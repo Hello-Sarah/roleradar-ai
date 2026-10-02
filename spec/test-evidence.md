@@ -43,6 +43,27 @@ validator resolves each canonical tool independently, so a PATH or basename subs
 produce release evidence. A dirty worktree, command substitution, stale or copied command
 provenance, missing hash, or unexpected evidence file cannot produce release evidence.
 
+New Task 11 release bundles additionally bind output digests at command completion, not only when
+assembling the bundle. The self-referential JSON command record is hashed by the bundle manifest;
+its referenced screenshot/trace/ledger artifacts are hashed in the command record itself. Later
+artifact substitution cannot be legitimized by recomputing only the final manifest hashes.
+
+Screenshot capture writes `browser-results/screenshot-captures.json` from the actual browser,
+observed URL locale, visible allowlisted system heading/route, visible confirmation/error/dialog
+state, and viewport. It records capture time/run/commit, PNG dimensions, file and decoded-pixel
+digests. The validator checks all 30 slots, exact identities, PNG decoding/CRC/dimensions and unique
+pixel content; EN-to-ZH, browser, route or viewport substitution is invalid. The ledger deliberately
+excludes arbitrary page text, source records and private payloads. Manual visual review remains
+required; semantic capture identity is not an automated pixel-level design assessment.
+
+Each required passing trace has exactly one browser/test/viewport context within the recorded run,
+complete nonempty action identities with successful completions, ordered workflow-specific action
+and expectation checkpoints, DOM snapshots, network stream and referenced replay resources.
+Duplicate archive/content identities, failed actions, missing call IDs/resources, truncated traces
+and minimal event-only traces cannot pass. Compact committed synthetic validator fixtures are not
+release evidence. Historical bundles remain byte-for-byte preserved and are not retroactively
+claimed to satisfy these stronger requirements.
+
 ## Acceptance record fields
 
 Each acceptance ID in the versioned `spec/acceptance-v1.json` catalog records requirement,
@@ -52,6 +73,10 @@ and linked defect. Every catalog criterion names its own automated check. The ge
 status from that named test, browser flow, accessibility result, Eval result, or release gate;
 generic or unconditional Pass records are invalid. Blocked is not Pass and prevents release for
 Must items.
+
+Every named required JUnit case must actually pass. Skipped/xfail/disabled/not-run cases are Blocked,
+including any member of an explicitly required parameterized population; pytest exit zero alone
+does not establish a Must criterion's execution.
 
 ## Required fresh commands
 
