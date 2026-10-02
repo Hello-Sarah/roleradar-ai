@@ -21,8 +21,19 @@ from functools import lru_cache
 from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import Any
+from zipfile import BadZipFile, ZipFile
 
 REQUIRED_COMMANDS = ("ruff", "format", "pytest", "e2e", "accessibility", "eval")
+REQUIRED_TRACE_WORKFLOWS = {
+    "desktop-primary-loop": "test_pasted_job_to_application_watchlist_and_tailored_cv",
+    "narrow-primary-loop": "test_primary_loop_and_copilot_are_non_blocking_at_390px",
+    "copilot-confirmation": "test_copilot_requires_keyboard_reachable_confirmation_before_write",
+}
+REQUIRED_TRACE_PATHS = tuple(
+    f"browser-results/traces/{browser}-{workflow}.zip"
+    for browser in ("chromium", "webkit")
+    for workflow in REQUIRED_TRACE_WORKFLOWS
+)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ACCEPTANCE_CATALOG = REPO_ROOT / "spec" / "acceptance-v1.json"
 COMMAND_OUTPUTS = {
@@ -33,7 +44,7 @@ COMMAND_OUTPUTS = {
         "automated-tests/pytest.xml",
         "automated-tests/coverage.xml",
     ),
-    "e2e": ("automated-tests/e2e-results.json",),
+    "e2e": ("automated-tests/e2e-results.json", *REQUIRED_TRACE_PATHS),
     "accessibility": (
         "automated-tests/accessibility-command.txt",
         "automated-tests/accessibility.json",
@@ -306,6 +317,37 @@ def _allowed_evidence_file(relative_name: str) -> bool:
     return False
 
 
+def _valid_flow_trace(path: Path, browser: str, test_name: str) -> bool:
+    """Require replayable Playwright events from the named browser and workflow."""
+    try:
+        with ZipFile(path) as archive:
+            streams = [entry for entry in archive.infolist() if entry.filename.endswith(".trace")]
+            if not streams or sum(entry.file_size for entry in streams) > 100_000_000:
+                return False
+            events = [
+                json.loads(line)
+                for entry in streams
+                for line in archive.read(entry).decode("utf-8").splitlines()
+                if line
+            ]
+        contexts = [event for event in events if event.get("type") == "context-options"]
+        before = {event.get("callId") for event in events if event.get("type") == "before"}
+        after = {event.get("callId") for event in events if event.get("type") == "after"}
+        return bool(before & after) and any(
+            event.get("browserName") == browser and test_name in event.get("title", "")
+            for event in contexts
+        )
+    except (
+        OSError,
+        BadZipFile,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        AttributeError,
+        TypeError,
+    ):
+        return False
+
+
 def validate_release_manifest(
     manifest: dict[str, Any],
     bundle_dir: Path,
@@ -445,6 +487,12 @@ def validate_release_manifest(
                 expected_name = f"{browser}-{required_name}.png"
                 if expected_name not in screenshot_names:
                     errors.append(f"missing screenshot evidence: {group}/{expected_name}")
+
+    for browser in ("chromium", "webkit"):
+        for workflow, test_name in REQUIRED_TRACE_WORKFLOWS.items():
+            relative = f"browser-results/traces/{browser}-{workflow}.zip"
+            if not _valid_flow_trace(bundle_dir / relative, browser, test_name):
+                errors.append(f"missing or invalid trace evidence: {relative}")
 
     eval_path = bundle_dir / "automated-tests" / "eval-summary.json"
     if not eval_path.is_file():
@@ -1003,6 +1051,8 @@ def write_acceptance_results(*, source: Path, commit: str, environment: str) -> 
             "screenshots/narrow/chromium-dashboard.png",
             "screenshots/narrow/chromium-job-detail.png",
             "screenshots/narrow/chromium-copilot.png",
+            "browser-results/traces/chromium-narrow-primary-loop.zip",
+            "browser-results/traces/webkit-narrow-primary-loop.zip",
         ],
         "UI-003": ["screenshots/en/webkit-dashboard.png"],
         "JOB-001": ["screenshots/en/chromium-job-detail.png"],
@@ -1012,6 +1062,8 @@ def write_acceptance_results(*, source: Path, commit: str, environment: str) -> 
         "CHAT-005": [
             "screenshots/en/chromium-copilot-confirmation.png",
             "screenshots/zh/chromium-copilot-confirmation.png",
+            "browser-results/traces/chromium-copilot-confirmation.zip",
+            "browser-results/traces/webkit-copilot-confirmation.zip",
         ],
         "DASH-001": ["screenshots/en/webkit-dashboard.png"],
     }

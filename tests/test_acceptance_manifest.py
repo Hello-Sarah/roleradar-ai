@@ -7,6 +7,7 @@ import sys
 import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 
@@ -21,6 +22,32 @@ from scripts.build_acceptance_bundle import (
 FULL_COMMIT = "1" * 40
 STARTED_AT = "2026-10-01T10:00:00Z"
 ENDED_AT = "2026-10-01T10:06:00Z"
+
+
+@pytest.mark.parametrize("mutation", ["missing", "not_zip", "wrong_browser", "wrong_workflow"])
+def test_release_gate_rejects_missing_or_substituted_passing_flow_trace(
+    tmp_path: Path, mutation: str
+) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    relative = "browser-results/traces/webkit-narrow-primary-loop.zip"
+    path = bundle / relative
+    if mutation == "missing":
+        path.unlink()
+        manifest["hashes"].pop(relative)
+    elif mutation == "not_zip":
+        path.write_bytes(b"not a replayable trace")
+    else:
+        replacement = (
+            "chromium-narrow-primary-loop.zip"
+            if mutation == "wrong_browser"
+            else "webkit-copilot-confirmation.zip"
+        )
+        path.write_bytes((path.parent / replacement).read_bytes())
+    if path.exists():
+        manifest["hashes"][relative] = _sha256(path)
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+    assert result.release_ready is False
+    assert any("trace evidence" in error for error in result.errors)
 
 
 def _init_git_repo(path: Path) -> None:
@@ -69,6 +96,28 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
                     b"synthetic-redacted-image"
                 )
     automated.mkdir(parents=True)
+    traces = bundle / "browser-results" / "traces"
+    traces.mkdir(parents=True)
+    for browser in ("chromium", "webkit"):
+        for workflow, test_name in {
+            "desktop-primary-loop": "test_pasted_job_to_application_watchlist_and_tailored_cv",
+            "narrow-primary-loop": "test_primary_loop_and_copilot_are_non_blocking_at_390px",
+            "copilot-confirmation": (
+                "test_copilot_requires_keyboard_reachable_confirmation_before_write"
+            ),
+        }.items():
+            with ZipFile(traces / f"{browser}-{workflow}.zip", "w") as trace:
+                trace.writestr(
+                    "trace.trace",
+                    "\n".join(
+                        json.dumps(event)
+                        for event in (
+                            {"type": "context-options", "browserName": browser, "title": test_name},
+                            {"type": "before", "method": "goto", "callId": "call@1"},
+                            {"type": "after", "callId": "call@1"},
+                        )
+                    ),
+                )
     (automated / "eval-summary.json").write_text(
         json.dumps(
             {
@@ -259,7 +308,7 @@ def _valid_bundle(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             "e2e",
             "pytest tests/e2e --browser chromium --browser webkit --tracing retain-on-failure "
             "--output=/tmp/bundle/browser-results",
-            ("automated-tests/e2e-results.json",),
+            ("automated-tests/e2e-results.json", *acceptance_bundle.REQUIRED_TRACE_PATHS),
         ),
         (
             "accessibility",

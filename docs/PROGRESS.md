@@ -19,7 +19,8 @@ and GitHub Actions.
 - Public job-link ingestion with automatic recording and analysis, structured JobPosting
   metadata support, redirect validation, response limits, and private-network blocking.
 - Transparent role classification with confidence and evidence.
-- Deterministic 100-point fit scoring across role, location, domain, and technical fit.
+- Deterministic evidence-backed `career-fit-v2` scoring across six dimensions with maxima
+  20/20/20/15/15/10 and Profile/rubric/model/prompt version preservation.
 - Structured AI explanations that cannot modify the deterministic score, with a safe
   non-LLM fallback when no API key is configured.
 - Application states: New, Saved, Applied, Interview, Rejected, Offer, Ignored.
@@ -28,11 +29,11 @@ and GitHub Actions.
 - Private CV library scanning with file fingerprints, changed-file updates, inactive-file
   handling, and support for DOCX, text-layer PDF, and TXT sources.
 - Explicit per-job tailored Word CV generation with exact-source evidence validation,
-  safe output naming, separate output storage, and authenticated model configuration.
+  safe output naming, separate output storage, and provider API-key configuration.
 - Bilingual Calm Intelligence Streamlit workspace with eight focused pages, responsive
   navigation, decision-first job cards, editable extraction preview, and persistent Career
   Copilot on desktop and mobile.
-- Official-careers allowlist for the selected companies; no unreliable scraping.
+- Public-URL safeguards and Watch List official-source metadata; no active monitoring service.
 - Local SQLite workflow and Docker Compose PostgreSQL deployment path.
 - CI, linting, formatting, unit/API tests, logging, error handling, and documentation.
 
@@ -74,6 +75,24 @@ and GitHub Actions.
 
 ## Next recommended milestone
 
-1. Complete Task 11 release documentation, final acceptance, and portfolio handoff.
-2. Add read-only dedicated-mailbox ingestion for allowlisted job alerts after V1 acceptance.
-3. Add verified structured-feed adapters one company at a time with contract tests.
+Task 11 documents actual migration/startup, bilingual workflow, Watch List taxonomy, confirmed
+Copilot actions, provider configuration, and CV/privacy boundaries. It also fixes missing Alembic
+image assets with a packaging regression. See [operations](operations.md) and [privacy](privacy.md).
+The final gate also retains and validates passing-flow traces for desktop/narrow primary loops and
+Copilot confirmation in both browsers; earlier Task 10 bundles did not retain passing traces.
+
+Final Task 11 verification is generated from its clean full-SHA candidate into
+`artifacts/acceptance/v1/<full-SHA>/`; inspect that commit's summary/manifest before claiming a pass.
+Ignored evidence is local, not included in a clone. The Task 10 snapshot above is historical,
+not Task 11 verification.
+
+Remaining acceptance/limitations:
+
+- Product-owner sign-off and review of 25 provisional JD labels are pending. Offline synthetic
+  Evals validate contracts/safety, not live-provider quality.
+- Container/PostgreSQL runtime smoke verification is separate from SQLite acceptance. Compose
+  needs separate persistent CV mounts and uses development credentials.
+- OCR, semantic extraction, retention automation, and manual assistive-tech QA are not promised by
+  automated checks. Streamlit upgrades require a fresh audit.
+- Phase 2: add read-only allowlisted-mailbox ingestion and verified adapters with contract tests,
+  then explicitly implement scheduling/new-job notification. Source metadata is not monitoring.

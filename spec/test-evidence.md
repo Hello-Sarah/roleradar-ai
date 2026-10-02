@@ -26,6 +26,14 @@ artifacts/acceptance/<version>/<git-commit>/
   defects/
 ```
 
+Successful Chromium and WebKit runs retain named ZIP traces for the desktop primary loop,
+narrow primary loop, and Copilot confirmation under `browser-results/traces/`. The E2E fixtures own
+these contexts so the canonical `--tracing retain-on-failure` plugin option cannot delete successful
+release traces. Each required ZIP must contain Playwright trace events with the named workflow,
+matching browser identity, and completed actions. The six trace paths belong to the E2E command's
+recorded artifact inventory and manifest hashes. Prior bundles without these traces are historical,
+not evidence for the strengthened final-release gate.
+
 `manifest.json` records version, full Git commit, dirty-worktree status, UTC start/end, OS, Python,
 browser versions, model ID, prompt/rubric/dataset versions, command exit codes, and SHA-256 hashes of
 every evidence file. Each command record includes the full HEAD, dirty status, commit time, exact

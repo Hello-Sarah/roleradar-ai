@@ -52,26 +52,70 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -e '.[dev]'
 cp .env.example .env
-uvicorn app.main:app --reload
+mkdir -p data/cv_library data/generated_cvs
+python -c 'from app.database.session import upgrade_database; upgrade_database()'
+uvicorn app.main:app --reload --host 127.0.0.1
 ```
 
 In a second terminal:
 
 ```bash
 source .venv/bin/activate
-streamlit run app/dashboard/streamlit_app.py
+streamlit run app/dashboard/streamlit_app.py --server.address=127.0.0.1 --browser.gatherUsageStats=false
 ```
 
 Open the dashboard at `http://localhost:8501`; API documentation is at
 `http://localhost:8000/docs`. The application has safe development defaults, so values in `.env`
-are optional unless you need to override them. Set `OPENAI_API_KEY` only to enable provider-backed
-explanations or CV generation.
+are optional unless you need to override them. API startup also upgrades the configured database
+through Alembic; never delete an existing database to upgrade. See [operations](docs/operations.md)
+for backups, migration checks, troubleshooting, and the clean-release workflow.
 
-To run PostgreSQL, the API, and dashboard together:
+Without `OPENAI_API_KEY`, job scoring/explanations and supported Copilot proposals have deterministic
+fallbacks; tailored CV generation requires a key. `AI_EXPLANATIONS_ENABLED=false` disables provider
+explanations and Copilot proposal inference, but does **not** disable provider-backed CV generation.
+`OPENAI_MODEL` defaults to `gpt-4.1-mini`; `OPENAI_BASE_URL` optionally selects a compatible provider.
+The private API has no authentication: keep API and dashboard on loopback or behind access controls.
+
+An optional development Compose configuration starts PostgreSQL, the API, and dashboard:
 
 ```bash
 docker compose up --build
 ```
+
+Compose uses development credentials and publishes ports; it is not a hardened public deployment.
+The V1 acceptance environment is local SQLite, not a live PostgreSQL/container smoke test. Configure
+private persistent CV mounts separately before using containerized CV generation.
+
+## Use the private workspace
+
+The eight routes are Dashboard, Analyze Job, Jobs, Applications, Watch List, CV Library, Digest,
+and Profile. First-visit Chinese browser preferences select Simplified Chinese; other languages
+select English. `中文 / EN` persists in the browser and URL without changing saved records. Company
+names and source evidence remain in their original language. At 390px, navigation and Copilot use
+drawers; the primary workflow remains available.
+
+Start in Profile, then paste a JD in Analyze Job, review/edit the extraction, and confirm analysis.
+Cancel leaves no job. Inspect the six evidence-backed `career-fit-v2` dimensions (20/20/20/15/15/10),
+flags, and recommendation: 85+ Must Apply, 70–84 Strong Apply, 55–69 Selective, below 55 Skip.
+Save the job, change its application status, and record dated events/channel/notes/follow-up.
+Dashboard shows due/overdue follow-ups and one next action; Digest uses persisted signals rather
+than rerunning the model. Profile edits do not silently rescore history; explicitly reanalyze.
+
+Watch List keeps three independent classifications: company type, strategic priority, and action
+window. These describe company strategy, not a job's score or authorization. Missing eligibility
+evidence stays unclear. Maintain verified source URL/kind/state and manual check time; disable a
+company with source history instead of deleting it. See [the taxonomy](spec/watch-list.md).
+
+Scan a dedicated read-only DOCX/text-layer PDF/TXT folder in CV Library, select a saved job, and
+explicitly generate a draft. Facts must be exact verified source selections; unsupported claims
+stop generation. Outputs and provenance are separate from source files. See [privacy](docs/privacy.md).
+
+Copilot opening/context selection invokes no model. Its default read-only answer quotes the selected
+job with record citations; provider-backed proposal inference is optional. Review the exact target,
+current/proposed values, side effects, and private-data use before confirming a supported action.
+Cancel makes no business mutation; repeat confirmation returns the original idempotent result.
+Bulk edits, source-CV overwrite, auto-application, and Copilot deletion are forbidden. Conversation
+deletion clears message bodies and retains non-content action audit records.
 
 ## Tests and evaluation
 
@@ -87,19 +131,25 @@ It validates deterministic score stability, evidence IDs, database-write safety,
 CV-claim support, and DOCX structure without copying source text into reports. See
 [`evals/README.md`](evals/README.md) for the contract and report format.
 
+The release harness exercises production paths with synthetic data and deterministic provider
+substitutes. It does not establish live-provider accuracy. Twenty-five subjective JD labels still
+require product-owner review; a passing automated gate is not human acceptance. Full Chromium/WebKit,
+axe accessibility, immutable acceptance evidence, and screenshot review instructions are in
+[operations](docs/operations.md#release-evidence-and-user-acceptance).
+
 ## Privacy and public-demo status
 
 The private product stores the records a user chooses to manage. CV inputs, extracted CV text, and
 generated CV files are local private data and are ignored by Git.
 
-The public, signed-out job-description demo is being implemented as a separate stateless surface.
+The opt-in public, signed-out job-description demo is a separate stateless API surface.
 Its privacy contract is explicit: submitted job-description text is processed for that request and
 is not stored in the product database, filesystem, analytics, error reports, traces, or application
-logs. It will use a versioned synthetic profile rather than private CV or profile data. No public
+logs. It uses a versioned synthetic profile rather than private CV or profile data. No public
 account, CV upload, saved job, application tracking, Watch List, or write-enabled Copilot action
 will be exposed.
 
-The planned public endpoint also has intentionally bounded input, request rate, provider budget,
+The public endpoint also has intentionally bounded input, request rate, provider budget,
 and timeout controls. Until that endpoint and its portfolio are deployed, use the local private
 application described above rather than treating this repository as a hosted service.
 
@@ -113,8 +163,16 @@ application described above rather than treating this repository as a hosted ser
   typed, confirmed API action.
 - The daily digest runs on demand or through an external scheduler; email and chat delivery remain
   out of scope.
-- The future public-demo rate/budget guard is designed for one application instance until a shared
+- The public-demo rate/budget guard is designed for one application instance until a shared
   store replaces its in-memory state.
+- Watch List monitoring, new-job notifications, dedicated-mailbox ingestion, and email/chat delivery
+  are Phase 2, not active V1 features. A source marked structured-ready does not schedule checks.
+- Scanned/image-only PDFs need external text extraction; V1 does not OCR them.
+- The accessibility gate pins Streamlit 1.62.0 and records only its exact reviewed sidebar ARIA
+  exception; upgrades require a new audit. Automated checks do not replace human assistive-tech QA.
+
+See [project progress](docs/PROGRESS.md), [operations](docs/operations.md), and
+[privacy boundaries](docs/privacy.md) for the release handoff.
 
 ## Public release checks
 

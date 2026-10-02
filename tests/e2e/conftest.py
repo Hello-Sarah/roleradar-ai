@@ -241,22 +241,54 @@ def _load_app(page: Page, app_runtime: AcceptanceRuntime) -> Page:
     return page
 
 
-@pytest.fixture
-def roleradar_page(page: Page, app_runtime: AcceptanceRuntime) -> Page:
-    return _load_app(page, app_runtime)
+def _release_trace_path(request: pytest.FixtureRequest, browser_name: str) -> Path:
+    from scripts.build_acceptance_bundle import REQUIRED_TRACE_WORKFLOWS
 
-
-@pytest.fixture
-def narrow_roleradar_page(
-    browser: Browser, app_runtime: AcceptanceRuntime
-) -> Generator[Page, None, None]:
-    context = browser.new_context(
-        viewport={"width": 390, "height": 844}, locale="en-US", reduced_motion="reduce"
+    test_name = request.node.originalname or request.node.name
+    workflow = next(
+        (name for name, test in REQUIRED_TRACE_WORKFLOWS.items() if test == test_name), test_name
     )
+    output = Path(str(request.config.getoption("output")))
+    path = output / "traces" / f"{browser_name}-{workflow}.zip"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@pytest.fixture
+def roleradar_page(
+    browser: Browser,
+    browser_context_args: dict[str, Any],
+    browser_name: str,
+    request: pytest.FixtureRequest,
+    app_runtime: AcceptanceRuntime,
+) -> Generator[Page, None, None]:
+    # Own this context so plugin retain-on-failure cannot discard successful release traces.
+    context = browser.new_context(**browser_context_args)
+    context.tracing.start(title=request.node.nodeid, screenshots=True, snapshots=True, sources=True)
     page = context.new_page()
     try:
         yield _load_app(page, app_runtime)
     finally:
+        context.tracing.stop(path=_release_trace_path(request, browser_name))
+        context.close()
+
+
+@pytest.fixture
+def narrow_roleradar_page(
+    browser: Browser,
+    browser_name: str,
+    request: pytest.FixtureRequest,
+    app_runtime: AcceptanceRuntime,
+) -> Generator[Page, None, None]:
+    context = browser.new_context(
+        viewport={"width": 390, "height": 844}, locale="en-US", reduced_motion="reduce"
+    )
+    context.tracing.start(title=request.node.nodeid, screenshots=True, snapshots=True, sources=True)
+    page = context.new_page()
+    try:
+        yield _load_app(page, app_runtime)
+    finally:
+        context.tracing.stop(path=_release_trace_path(request, browser_name))
         context.close()
 
 
