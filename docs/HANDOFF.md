@@ -275,8 +275,40 @@ Important breakage. The implementer reported 31 focused and 189 full tests passi
 
 ## Remaining plan
 
-- Task 10: browser, accessibility, and immutable acceptance-evidence automation.
 - Task 11: release documentation, final acceptance, and portfolio handoff.
+
+## Completed implementation: Task 10
+
+Task 10 supplies the release-quality evidence gate for the full V1 product. It runs the primary
+workflow in Chromium and WebKit at desktop and mobile widths, captures bilingual screenshots,
+checks eight routes and twelve dynamic states for accessibility and keyboard operation, executes
+the 130-case deterministic Eval suite, and records every Must acceptance criterion in an immutable
+full-commit-SHA evidence bundle.
+
+Independent review deliberately attacked the gate across five rounds. The accepted implementation
+rejects executable substitution and attacker-controlled `PATH`, binds command results and exact
+tool identities into the hashed manifest, refuses replay/overwrite, detects incomplete or duplicated
+test evidence, invokes production JD/CV/Copilot paths, and prevents expected intent or parameters
+from leaking into the system under test. The final review report is
+`.superpowers/sdd/2026-08-25-role-radar-v1/task-10-rereview-5.md` and contains no open Critical,
+Important, or Minor finding.
+
+Accepted commit and evidence:
+
+```text
+commit: ecaded9a2850e36c7960809785a1770c309a495d
+bundle: artifacts/acceptance/v1/ecaded9a2850e36c7960809785a1770c309a495d
+pytest: 421 passed; 87% coverage
+reviewer focused suite: 95 passed
+browser E2E: 20 passed across Chromium and WebKit
+Eval: 130/130 passed; 0 zero-tolerance failures
+acceptance: 40 Pass; 0 Fail; 0 Blocked
+accessibility: 8 routes; 12 dynamic states; 0 AA/unresolved/keyboard failures
+```
+
+All six earlier candidate bundles remain immutable and hash-consistent. The evidence builder refuses
+to overwrite the accepted bundle, and the ignored user `roleradar.db` remained unchanged throughout
+the Task 10 verification cycle.
 
 ## Problems encountered and lessons
 
@@ -363,8 +395,8 @@ findings. Then update both the SDD ledger and this document, create a normal com
 1. Open this file and `.superpowers/sdd/2026-08-25-role-radar-v1/progress.md`.
 2. Confirm the active worktree, branch, `git status`, local HEAD, and remote branch hash.
 3. Do not re-dispatch Tasks 1–5; they are already accepted.
-4. Do not resume Tasks 1–9. Task 10, browser/accessibility and immutable acceptance-evidence
-   automation, is the next incomplete item; do not start it without explicit scope.
-5. Do not treat Task 9 as independently accepted until plain focused/full pytest pass in the
-   provisioned project environment and the exact Task 9 diff receives review.
+4. Do not resume Tasks 1–10; they are accepted. Task 11 release documentation, final acceptance,
+   and portfolio handoff is the next incomplete item.
+5. Treat Task 9's Eval harness as accepted only together with the Task 10 final gate at `ecaded9`;
+   the five Task 10 reviews are where its production-path and adversarial sensitivity were proven.
 6. After each accepted task, update this handoff, push GitHub, and verify the remote commit hash.

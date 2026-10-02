@@ -1,6 +1,6 @@
 # RoleRadar AI — Project Progress
 
-Last updated: 2026-10-01
+Last updated: 2026-10-02
 
 ## Current status
 
@@ -48,6 +48,13 @@ and GitHub Actions.
 - Independent review identified transaction, stale-input, Profile-version, failure-audit, and
   deleted-target issues. Commit `128b4f9` fixed them; scoped re-review marked all findings addressed
   with no new Critical or Important breakage. See `docs/HANDOFF.md` for recovery details and lessons.
+- Task 8 makes Dashboard and Digest decisions deterministic from persisted recommendation and
+  application-event state.
+- Task 9 provides the versioned 130-case Golden Dataset and deterministic Eval runner used by the
+  release gate.
+- Task 10 is accepted at `ecaded9` after five adversarial review rounds. Its immutable evidence
+  bundle records dual-browser workflows, bilingual/mobile screenshots, accessibility, Eval,
+  acceptance criteria, command provenance, and artifact hashes.
 
 ## Validation snapshot
 
@@ -60,10 +67,13 @@ and GitHub Actions.
 - Local Dashboard returned HTTP 200 at `http://127.0.0.1:8501`.
 - Fresh 2026-10-01 controller verification passed the complete tracked pytest suite with 87%
   coverage, tracked Ruff lint/format, Alembic head `20260825_05`, and `git diff --check`.
+- Task 10 final verification: 421 tests at 87% coverage, 20/20 Chromium/WebKit E2E, 130/130 Eval,
+  40/40 Must acceptance criteria, and zero unresolved accessibility or keyboard failures across
+  eight routes and twelve dynamic states. Independent rereview round 5 returned APPROVED with no
+  Critical, Important, or Minor findings.
 
 ## Next recommended milestone
 
-1. Complete Task 10 browser, accessibility, and immutable acceptance-evidence automation.
-2. Complete Task 11 release documentation, final acceptance, and portfolio handoff.
-3. Add read-only dedicated-mailbox ingestion for allowlisted job alerts after V1 acceptance.
-4. Add verified structured-feed adapters one company at a time with contract tests.
+1. Complete Task 11 release documentation, final acceptance, and portfolio handoff.
+2. Add read-only dedicated-mailbox ingestion for allowlisted job alerts after V1 acceptance.
+3. Add verified structured-feed adapters one company at a time with contract tests.
