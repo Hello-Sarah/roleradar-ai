@@ -29,6 +29,16 @@ def _assert_material_icons_render(page: Any) -> None:
     assert broken == []
 
 
+def _assert_top_utility_clear_of_toolbar(page: Any) -> None:
+    utility = page.get_by_test_id("stMainBlockContainer").get_by_test_id("stCaptionContainer").first
+    header = page.get_by_test_id("stHeader")
+    expect(utility).to_be_visible()
+    utility_bounds = utility.bounding_box()
+    header_bounds = header.bounding_box()
+    assert utility_bounds is not None and header_bounds is not None
+    assert utility_bounds["y"] >= header_bounds["y"] + header_bounds["height"]
+
+
 @pytest.mark.parametrize(("locale", "language_label"), [("en", "EN"), ("zh", "中文")])
 def test_bilingual_visual_routes_use_identical_redacted_seed(
     seeded_roleradar_page: Any,
@@ -47,6 +57,9 @@ def test_bilingual_visual_routes_use_identical_redacted_seed(
             )
         ).to_be_visible()
         _assert_material_icons_render(page)
+        _assert_top_utility_clear_of_toolbar(page)
+        context_prefix = "Current context" if locale == "en" else "当前上下文"
+        expect(page.get_by_text(f"{context_prefix}: {localized_route}", exact=True)).to_be_visible()
         page.screenshot(path=screenshot_path(locale, f"{slug}.png"), full_page=True)
 
 
@@ -69,6 +82,7 @@ def test_narrow_visuals_have_no_horizontal_overflow(
             page.get_by_text(route, exact=True).first.click()
             page.get_by_test_id("stSidebarCollapseButton").click()
         assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        _assert_top_utility_clear_of_toolbar(page)
         page.screenshot(path=screenshot_path("narrow", f"{slug}.png"), full_page=True)
     page.get_by_role("button", name="Open Career Copilot").first.click()
     expect(page.get_by_role("dialog")).to_be_visible()

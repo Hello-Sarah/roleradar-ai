@@ -262,6 +262,14 @@ def test_theme_switches_persistent_copilot_to_full_screen_mobile_drawer() -> Non
     assert "width: 100vw" in css
 
 
+def test_theme_keeps_top_utility_below_streamlit_toolbar_at_both_widths() -> None:
+    from app.dashboard.theme import calm_intelligence_css
+
+    css = calm_intelligence_css()
+    assert "max-width: 1440px; padding: 4rem 2.5rem 4rem" in css
+    assert "padding: 4rem 1rem 3rem; max-width: 100%" in css
+
+
 def test_theme_keeps_primary_copy_contrasting_and_sidebar_control_legible() -> None:
     """Catch gray primary-button copy and leaked Material icon names on narrow screens."""
     from app.dashboard.theme import calm_intelligence_css

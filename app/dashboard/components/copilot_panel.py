@@ -11,6 +11,7 @@ from uuid import uuid4
 import streamlit as st
 
 from app.dashboard.client import APIClientError, RoleRadarClient
+from app.dashboard.components.navigation import navigation_items
 from app.dashboard.components.states import render_state
 from app.dashboard.state import (
     PageAction,
@@ -398,7 +399,11 @@ def _render_copilot_panel(
         label = route_context.get("title") or route_context.get("name")
         st.info(f"{translate(locale, 'copilot.context')}: {label}")
     else:
-        st.caption(f"{translate(locale, 'copilot.context')}: {context.route}")
+        route_label = next(
+            (item.label for item in navigation_items(locale) if item.route == context.route),
+            translate(locale, "copilot.empty"),
+        )
+        st.caption(f"{translate(locale, 'copilot.context')}: {route_label}")
 
     sessions = client.get("/api/v1/copilot/sessions")
     proposal = st.session_state.get("copilot.pending_proposal")

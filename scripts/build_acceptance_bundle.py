@@ -1229,6 +1229,20 @@ def _summary(manifest: dict[str, Any], validation: ManifestValidation) -> str:
     lines.extend(f"- {error}" for error in validation.errors)
     if not validation.errors:
         lines.append("- None")
+    lines.extend(["", "## Known P2 items", ""])
+    p2_items = [
+        item
+        for item in manifest.get("open_defects", [])
+        if isinstance(item, dict) and item.get("severity") == "P2"
+    ]
+    if not p2_items:
+        lines.append("- None")
+    for item in p2_items:
+        lines.append(
+            f"- {item.get('id', 'unknown')} (P2): {item.get('description', '')}; "
+            f"route={item.get('route', '')}; viewport={item.get('viewport', '')}; "
+            f"evidence={item.get('evidence', [])}; impact={item.get('primary_loop_impact', '')}"
+        )
     lines.append("")
     return "\n".join(lines)
 

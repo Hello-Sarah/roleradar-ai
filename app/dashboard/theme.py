@@ -26,7 +26,7 @@ def calm_intelligence_css() -> str:
       background: var(--rr-canvas) !important; color: var(--rr-text) !important;
       overflow-x: hidden;
     }
-    [data-testid="stMainBlockContainer"] { max-width: 1440px; padding: 2rem 2.5rem 4rem; }
+    [data-testid="stMainBlockContainer"] { max-width: 1440px; padding: 4rem 2.5rem 4rem; }
     [data-testid="stSidebar"] {
       background: rgba(255, 255, 255, .88); border-right: 1px solid var(--rr-hairline);
     }
@@ -74,7 +74,7 @@ def calm_intelligence_css() -> str:
     .st-key-mobile_copilot_launcher { display: none; }
     @media (max-width: 390px) {
       html, body, .stApp { max-width: 100vw; overflow-x: hidden; }
-      [data-testid="stMainBlockContainer"] { padding: 1rem 1rem 3rem; max-width: 100%; }
+      [data-testid="stMainBlockContainer"] { padding: 4rem 1rem 3rem; max-width: 100%; }
       [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
       [data-testid="stSidebar"][aria-expanded="true"] {
         width: 100vw !important; min-width: 100vw !important; max-width: 100vw !important;

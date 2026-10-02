@@ -24,6 +24,33 @@ STARTED_AT = "2026-10-01T10:00:00Z"
 ENDED_AT = "2026-10-01T10:06:00Z"
 
 
+def test_generated_summary_records_nonblocking_p2_reproduction_and_evidence(tmp_path: Path) -> None:
+    bundle, manifest = _valid_bundle(tmp_path)
+    manifest["open_defects"] = [
+        {
+            "id": "RR-P2-HEADER-001",
+            "severity": "P2",
+            "description": "Desktop utility helper line partially clipped by framework toolbar",
+            "route": "Dashboard / 仪表盘",
+            "viewport": "1440x1100",
+            "evidence": ["screenshots/en/chromium-dashboard.png"],
+            "primary_loop_impact": "None: required controls remain reachable; accessibility passes",
+        }
+    ]
+    validation = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+    assert validation.release_ready
+    summary = acceptance_bundle._summary(manifest, validation)
+    for detail in (
+        "RR-P2-HEADER-001",
+        "P2",
+        "1440x1100",
+        "Dashboard / 仪表盘",
+        "screenshots/en/chromium-dashboard.png",
+        "required controls remain reachable",
+    ):
+        assert detail in summary
+
+
 @pytest.mark.parametrize("mutation", ["missing", "not_zip", "wrong_browser", "wrong_workflow"])
 def test_release_gate_rejects_missing_or_substituted_passing_flow_trace(
     tmp_path: Path, mutation: str

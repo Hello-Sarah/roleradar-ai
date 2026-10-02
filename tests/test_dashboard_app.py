@@ -1022,3 +1022,30 @@ def test_every_route_renders_its_localized_h1_and_empty_state(locale: str, route
     assert not app.exception
     assert len(app.title) == 1
     assert app.title[0].value == translate(locale, f"page.{route}.title")
+
+
+@pytest.mark.parametrize("locale", ["en", "zh-Hans"])
+@pytest.mark.parametrize(
+    "route",
+    [
+        "dashboard",
+        "analyze",
+        "jobs",
+        "applications",
+        "watchlist",
+        "cv_library",
+        "digest",
+        "profile",
+    ],
+)
+def test_copilot_route_context_uses_localized_navigation_label(locale: str, route: str) -> None:
+    from app.dashboard.components.navigation import navigation_items
+
+    app = AppTest.from_function(_render_shell, args=(ShellClient(),))
+    app.session_state["ui.locale"] = locale
+    app.session_state["ui.route"] = route
+    app.run()
+    label = next(item.label for item in navigation_items(locale) if item.route == route)
+    expected = f"{translate(locale, 'copilot.context')}: {label}"
+    assert not app.exception
+    assert expected in _rendered_text(app)

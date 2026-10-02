@@ -80,6 +80,11 @@ Copilot actions, provider configuration, and CV/privacy boundaries. It also fixe
 image assets with a packaging regression. See [operations](operations.md) and [privacy](privacy.md).
 The final gate also retains and validates passing-flow traces for desktop/narrow primary loops and
 Copilot confirmation in both browsers; earlier Task 10 bundles did not retain passing traces.
+Screenshot review also found internal route slugs in Copilot's context caption and toolbar overlap
+of top utility/status copy. Localized navigation labels now replace visible slugs without changing
+stable API keys; extra top spacing clears the framework toolbar at desktop and narrow widths.
+Rendered bilingual-route and spacing regressions protect both corrections. Generated summaries
+explicitly list known P2 items (or None) instead of hiding them behind a READY flag.
 
 Final Task 11 verification is generated from its clean full-SHA candidate into
 `artifacts/acceptance/v1/<full-SHA>/`; inspect that commit's summary/manifest before claiming a pass.
