@@ -3,6 +3,37 @@ from types import SimpleNamespace
 import pytest
 
 
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "No visa sponsorship available.",
+        "Visa sponsorship is not available.",
+        "We will sponsor training, not visas.",
+        "Visa sponsorship available. No visa sponsorship available.",
+        "We do not provide visa sponsorship.",
+    ],
+)
+def test_rr_f07_negative_conflicting_and_nonvisa_sponsorship_is_not_approval(statement):
+    from app.watchlist.eligibility import evaluate_job_eligibility
+
+    result = evaluate_job_eligibility(
+        SimpleNamespace(
+            title="AI Engineer",
+            location="Hong Kong",
+            description=statement,
+            analysis=SimpleNamespace(fit_score=90),
+        ),
+        SimpleNamespace(
+            strategic_priority="core_target", action_window="apply_now", rationale="Company only"
+        ),
+        SimpleNamespace(preferred_locations=["Hong Kong"], future_locations=[]),
+    )
+    assert result.work_authorization == "unclear"
+    assert result.expected_return == "relationship_only"
+    if "visa" in statement.casefold():
+        assert statement in " ".join(result.work_authorization_evidence)
+
+
 def test_watchlist_enums_use_stable_machine_values() -> None:
     from app.watchlist.models import ActionWindow, CompanyType, SourceState, StrategicPriority
 
@@ -212,7 +243,7 @@ def test_company_tier_does_not_set_job_score_or_force_apply_now() -> None:
     [
         (
             "Own solution design, build AI agent prototypes, evaluate quality, and deploy "
-            "to production.",
+            "to production. Visa sponsorship available.",
             True,
             "apply_now",
         ),

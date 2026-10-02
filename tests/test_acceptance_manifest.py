@@ -33,6 +33,18 @@ STARTED_AT = "2026-10-01T10:00:00Z"
 ENDED_AT = "2026-10-01T10:06:00Z"
 
 
+@pytest.mark.parametrize("criterion", ["SCORE-004", "WATCH-004", "WATCH-005", "CHAT-003"])
+def test_final_review_gate_rejects_helper_only_evidence(tmp_path, criterion):
+    bundle, manifest = _valid_bundle(tmp_path)
+    browser = next(command for command in manifest["commands"] if command["name"] == "e2e")
+    before = browser["stdout"]
+    browser["stdout"] = "\n".join(line for line in before.splitlines() if "test_rr_" not in line)
+    assert before != browser["stdout"]
+    _refresh_command_hashes(bundle, manifest)
+    result = validate_release_manifest(manifest, bundle, expected_commit=FULL_COMMIT)
+    assert f"acceptance status does not match evidence: {criterion}" in result.errors
+
+
 def _refresh_command_hashes(bundle: Path, manifest: dict) -> None:
     """Remove digest mismatch as a confounder when testing semantic rejection."""
     for command in manifest["commands"]:

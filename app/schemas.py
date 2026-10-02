@@ -7,6 +7,7 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, HttpUrl, model_va
 from app.watchlist.models import (
     ActionWindow,
     CompanyType,
+    JobEligibility,
     SourceKind,
     SourceState,
     StrategicPriority,
@@ -191,12 +192,20 @@ class JobRead(BaseModel):
     classification: ClassificationRead | None = None
     analysis: AnalysisRead | None = None
     application_events: list[ApplicationEventRead] = Field(default_factory=list)
+    watchlist_company_id: int | None = None
+    watchlist_company_name: str | None = None
+    eligibility: JobEligibility | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class StatusUpdate(BaseModel):
     status: ApplicationStatus
+
+
+class JobCompanyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    company_id: int | None = Field(ge=1)
 
 
 class WatchListCompanyBase(BaseModel):
@@ -390,6 +399,7 @@ class GeneratedCVRead(BaseModel):
     file_path: str
     source_cv_ids: list[int]
     source_cv_hashes: dict[str, str]
+    source_evidence: list[dict[str, object]] = Field(default_factory=list)
     output_hash: str
     model_version: str
     prompt_version: str

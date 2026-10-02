@@ -8,6 +8,49 @@ from app.config import Settings
 from app.database.models import ApplicationEvent, Job
 
 
+@pytest.mark.parametrize("new_date", [None, "2026-10-01"])
+def test_rr_f09_newest_event_invalidates_followup_preview_even_when_date_is_equal(db, new_date):
+    from datetime import date
+
+    from app.copilot.actions import ActionConflictError, confirm_action, create_action_proposal
+    from app.copilot.contracts import SetFollowUpProposal
+    from app.schemas import ApplicationEventCreate
+    from app.services.job_service import add_application_event
+
+    job = _job(db)
+    add_application_event(
+        db,
+        job.id,
+        ApplicationEventCreate(
+            status="Applied",
+            occurred_at=datetime(2026, 10, 1, tzinfo=UTC),
+            next_follow_up_date=date(2026, 10, 1),
+        ),
+    )
+    db.expire_all()
+    proposal = create_action_proposal(
+        db,
+        session_id=_session(db).id,
+        proposal=SetFollowUpProposal(
+            target_id=job.id, expected_status="Applied", follow_up_date=date(2026, 10, 9)
+        ),
+    )
+    assert proposal.current_value["next_follow_up_date"] == "2026-10-01"
+    add_application_event(
+        db,
+        job.id,
+        ApplicationEventCreate(
+            status="Applied",
+            occurred_at=datetime(2026, 10, 2, tzinfo=UTC),
+            next_follow_up_date=date.fromisoformat(new_date) if new_date else None,
+        ),
+    )
+    db.expire_all()
+    with pytest.raises(ActionConflictError):
+        confirm_action(proposal.id, "stale-followup", db, Settings())
+    assert db.query(ApplicationEvent).count() == 2
+
+
 def _job(db, *, description: str | None = None) -> Job:
     job = Job(
         fingerprint="copilot-action-job",

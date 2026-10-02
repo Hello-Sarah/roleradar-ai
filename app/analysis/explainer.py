@@ -123,6 +123,8 @@ def explain_fit(
     if not settings.ai_explanations_enabled or not settings.openai_api_key:
         return deterministic_fallback_explanation(job, result), "deterministic-fallback"
 
+    private_mode = allowed_evidence is None
+    allowed_evidence = result.evidence if private_mode else allowed_evidence
     prompt = {
         "instruction": (
             "Explain the already-computed score. Do not change or invent a score. "
@@ -177,8 +179,17 @@ def explain_fit(
             if response.output_parsed is None:
                 raise ValueError("Model returned no structured explanation")
             explanation = response.output_parsed
-        if allowed_evidence is not None:
-            _validate_public_selections(explanation, allowed_evidence)
+        _validate_public_selections(explanation, allowed_evidence)
+        if private_mode:
+            # Free-form provider prose is never persisted as factual explanation.
+            # The model selects canonical evidence; deterministic code renders it.
+            canonical = {item.id: item.text for item in allowed_evidence}
+            selected = list(
+                dict.fromkeys(canonical[item.evidence_id] for item in explanation.selections)
+            )
+            safe = deterministic_fallback_explanation(job, result)
+            safe.evidence = selected[:6]
+            explanation = safe
         return explanation, settings.openai_model
     except Exception:
         logger.error("AI explanation provider failed; using deterministic fallback")

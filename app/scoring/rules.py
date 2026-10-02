@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 SCORING_VERSION = "career-fit-v2"
-PROMPT_VERSION = "career-fit-v2-explainer-v1"
+PROMPT_VERSION = "career-fit-v2-explainer-v2-selections"
 
 DIMENSION_MAXIMA: dict[str, int] = {
     "ai_depth": 20,

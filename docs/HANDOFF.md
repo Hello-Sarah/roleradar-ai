@@ -1,6 +1,22 @@
 # RoleRadar AI — Engineering Handoff
 
-Last updated: 2026-10-01
+Last updated: 2026-10-02
+
+## Current release status — overrides historical task notes below
+
+Task 11's evidence-integrity work was accepted at
+`8e80b9f796b33b7979e155f3339589f81854b721`, but the final whole-branch review
+returned **CHANGES REQUIRED** for RR-F01–RR-F09. A single final fix wave addresses
+those findings with named regressions, integrated browser tests and a fresh immutable
+full-SHA evidence bundle. The exact candidate, verification results and bundle identity
+are recorded in `.superpowers/sdd/2026-08-25-role-radar-v1/final-fix-report.md`.
+Earlier bundles, including Task 10 and Task 11, are historical evidence, not authority
+for this changed candidate. Independent final re-review is still required.
+
+No push or merge is authorized in this wave. Human product-owner acceptance / 25 subjective
+labels, live-provider quality, actual Docker/PostgreSQL runtime, current macOS Safari smoke,
+manual assistive-technology checks and publication privacy review remain pending.
+WebKit evidence does not constitute Safari smoke or human release signoff.
 
 This is the recovery document for the active V1 implementation plan. It records what is safe,
 what is still under review, what failed previously, and the exact checks required before work is
@@ -275,7 +291,8 @@ Important breakage. The implementer reported 31 focused and 189 full tests passi
 
 ## Remaining plan
 
-- Task 11: release documentation, final acceptance, and portfolio handoff.
+- Independently re-review the final RR-F01–RR-F09 fix wave and its fresh bundle.
+- Resolve explicitly pending human/runtime/manual acceptance items before release claims.
 
 ## Completed implementation: Task 10
 
@@ -387,16 +404,16 @@ For Task 6, also run:
 ```
 
 The independent reviewer must inspect the exact fix diff and return no open Critical or Important
-findings. Then update both the SDD ledger and this document, create a normal completion commit, push
-`codex/roleradar-v1`, and verify the remote hash with `git ls-remote`.
+findings. Then update both the SDD ledger and this document and create a normal completion commit.
+Do not push or merge without new explicit authorization.
 
 ## Next-session startup checklist
 
 1. Open this file and `.superpowers/sdd/2026-08-25-role-radar-v1/progress.md`.
 2. Confirm the active worktree, branch, `git status`, local HEAD, and remote branch hash.
 3. Do not re-dispatch Tasks 1–5; they are already accepted.
-4. Do not resume Tasks 1–10; they are accepted. Task 11 release documentation, final acceptance,
-   and portfolio handoff is the next incomplete item.
-5. Treat Task 9's Eval harness as accepted only together with the Task 10 final gate at `ecaded9`;
-   the five Task 10 reviews are where its production-path and adversarial sensitivity were proven.
-6. After each accepted task, update this handoff, push GitHub, and verify the remote commit hash.
+4. Do not redispatch historical Tasks 1–11. Continue only the final review/fix/re-review state
+   recorded above and in the SDD ledger.
+5. Use the fresh full-SHA bundle for the current candidate. Earlier passing catalogs do not
+   override the final review's demonstrated product coverage gaps.
+6. Update this handoff and the ledger after review. No push/merge without explicit authorization.

@@ -24,7 +24,7 @@ from app.database.models import CVDocument, GeneratedCV, Job
 from app.schemas import CVDocumentRead, CVLibraryScanRead, GeneratedCVRead
 
 SUPPORTED_CV_SUFFIXES = {".docx", ".pdf", ".txt"}
-CV_PROMPT_VERSION = "tailored-cv-v1"
+CV_PROMPT_VERSION = "tailored-cv-v2-document-body"
 CONTROLLED_SECTION_LABELS = frozenset(
     {"Experience", "Professional Experience", "Education", "Projects", "Certifications"}
 )
@@ -38,6 +38,7 @@ class CVLibraryError(ValueError):
 class EvidenceBackedItem(BaseModel):
     text: str = Field(min_length=2, max_length=500)
     source_quote: str = Field(min_length=2, max_length=800)
+    source_document_id: int | None = None
 
 
 class TailoredCVSection(BaseModel):
@@ -73,6 +74,7 @@ class PreparedTailoredCV:
     source_cv_ids: list[int]
     source_cv_hashes: dict[str, str]
     source_cv_input_fingerprints: dict[str, str]
+    source_evidence: list[dict[str, object]]
     model_version: str
     prompt_version: str
     generated_at: datetime
@@ -182,16 +184,31 @@ def _normalized_contains(corpus: str, quote: str) -> bool:
     return normalize(quote) in normalize(corpus)
 
 
-def _validate_evidence(content: TailoredCVContent, corpus: str) -> None:
+def _validate_evidence(content: TailoredCVContent, corpus: str | list[CVDocument]) -> None:
     items = [content.name, content.headline, *content.summary, *content.skills]
     if content.contact:
         items.append(content.contact)
     items.extend(item for section in content.sections for item in section.items)
-    unsupported = [
-        item.text
-        for item in items
-        if item.text != item.source_quote or not _normalized_contains(corpus, item.source_quote)
-    ]
+    # A quote must be wholly contained in ONE extracted body. Prompt headers, file
+    # names and text spanning two documents are never evidence. Resolve a missing
+    # source ID deterministically for backwards-compatible exact-quote providers.
+    bodies = (
+        {document.id: document.extracted_text for document in corpus}
+        if isinstance(corpus, list)
+        else {None: corpus}
+    )
+    unsupported = []
+    for item in items:
+        matching_ids = [
+            source_id
+            for source_id, body in bodies.items()
+            if (item.source_document_id is None or item.source_document_id == source_id)
+            and _normalized_contains(body, item.source_quote)
+        ]
+        if item.text != item.source_quote or not matching_ids:
+            unsupported.append(item.text)
+        else:
+            item.source_document_id = matching_ids[0]
     if unsupported:
         raise CVLibraryError(
             "The model produced claims without verifiable CV evidence; generation was stopped"
@@ -228,7 +245,9 @@ def _generate_content(
                     "Create an ATS-friendly tailored CV using only facts present in the source "
                     "CVs. Never invent skills, employers, dates, achievements, metrics, education, "
                     "or credentials. Every output item's text must exactly equal an exact "
-                    "source_quote copied from the CV corpus; do not rewrite it. "
+                    "source_quote copied from one extracted CV body; do not rewrite it. "
+                    "Include source_document_id. Filenames and SOURCE CV headers are metadata, "
+                    "never factual evidence. "
                     "Section titles must be one of: Experience, Professional Experience, "
                     "Education, Projects, or "
                     "Certifications."
@@ -246,7 +265,7 @@ def _generate_content(
     )
     if response.output_parsed is None:
         raise CVLibraryError("The model returned no structured CV content")
-    _validate_evidence(response.output_parsed, corpus)
+    _validate_evidence(response.output_parsed, documents)
     logger.info("Generated validated CV content for job_id=%s", job.id)
     return response.output_parsed
 
@@ -402,7 +421,11 @@ def prepare_tailored_cv(
     content = (content_provider or _generate_content)(document_snapshots, job_snapshot, settings)
     # Preserve this deterministic gate at the generation boundary so validation cannot be
     # bypassed by a future provider adapter or an internal caller.
-    _validate_evidence(content, _source_corpus(document_snapshots))
+    _validate_evidence(content, document_snapshots)
+    items = [content.name, content.headline, *content.summary, *content.skills]
+    if content.contact:
+        items.append(content.contact)
+    items.extend(item for section in content.sections for item in section.items)
     output_directory = _configured_directory(settings.generated_cv_path)
     file_name = (
         f"{_safe_filename(content.name.text)}—{_safe_filename(job_snapshot.title)}-chatgpt.docx"
@@ -435,6 +458,7 @@ def prepare_tailored_cv(
         source_cv_input_fingerprints={
             str(document.id): _cv_input_fingerprint(document) for document in document_snapshots
         },
+        source_evidence=[item.model_dump() for item in items],
         model_version=settings.openai_model,
         prompt_version=CV_PROMPT_VERSION,
         generated_at=generated_at,
@@ -474,6 +498,7 @@ def persist_prepared_tailored_cv(db: Session, prepared: PreparedTailoredCV) -> G
         output_hash=prepared.output_hash,
         source_cv_ids=prepared.source_cv_ids,
         source_cv_hashes=prepared.source_cv_hashes,
+        source_evidence=prepared.source_evidence,
         model_version=prepared.model_version,
         prompt_version=prepared.prompt_version,
         generated_at=prepared.generated_at,
@@ -494,6 +519,7 @@ def persist_prepared_tailored_cv(db: Session, prepared: PreparedTailoredCV) -> G
         file_path=prepared.file_path,
         source_cv_ids=prepared.source_cv_ids,
         source_cv_hashes=prepared.source_cv_hashes,
+        source_evidence=prepared.source_evidence,
         output_hash=prepared.output_hash,
         model_version=prepared.model_version,
         prompt_version=prepared.prompt_version,

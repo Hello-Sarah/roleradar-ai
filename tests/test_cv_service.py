@@ -6,7 +6,7 @@ import pytest
 from docx import Document
 
 from app.config import Settings
-from app.database.models import GeneratedCV, Job
+from app.database.models import CVDocument, GeneratedCV, Job
 from app.services.cv_service import (
     CVLibraryError,
     EvidenceBackedItem,
@@ -197,6 +197,10 @@ def test_generation_preserves_source_bytes_and_stores_complete_provenance(
         str(scan.documents[0].id): source_hash,
         str(scan.documents[1].id): supplemental_hash,
     }
+    assert generated.source_evidence
+    bodies = {document.id: document.extracted_text for document in db.query(CVDocument)}
+    for item in generated.source_evidence:
+        assert item["source_quote"] in bodies[item["source_document_id"]]
     assert generated.model_version == "test-model"
     assert generated.prompt_version
     # SQLite does not round-trip timezone metadata, unlike the production database.
@@ -447,3 +451,24 @@ def test_repeated_generation_preserves_each_artifact_bytes_and_provenance(
 
 def test_safe_filename_removes_path_characters() -> None:
     assert _safe_filename("Jane/Smith: AI*Lead?") == "Jane Smith  AI Lead"
+
+
+@pytest.mark.parametrize("claim", ["AWS Certified Solutions Architect", "SOURCE CV"])
+def test_rr_f02_metadata_cannot_support_cv_claim_before_file_creation(
+    db, tmp_path, monkeypatch, claim
+) -> None:
+    source = tmp_path / "library"
+    source.mkdir()
+    (source / "AWS Certified Solutions Architect.txt").write_text(
+        "Jane Doe\njane@example.com · Hong Kong\nApplied AI Engineer\n"
+        "Built reliable Python APIs for banking users."
+    )
+    settings = Settings(cv_library_path=str(source), generated_cv_path=str(tmp_path / "out"))
+    scan_cv_library(db, settings)
+    content = _validated_content()
+    content.headline = EvidenceBackedItem(text=claim, source_quote=claim)
+    monkeypatch.setattr("app.services.cv_service._generate_content", lambda *_: content)
+    with pytest.raises(CVLibraryError, match="without verifiable CV evidence"):
+        generate_tailored_cv(db, _job(db).id, settings)
+    assert not (tmp_path / "out").exists()
+    assert db.query(GeneratedCV).count() == 0

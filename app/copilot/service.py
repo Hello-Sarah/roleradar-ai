@@ -22,7 +22,9 @@ from app.copilot.contracts import (
     SetFollowUpProposal,
 )
 from app.database.models import CopilotMessage, CopilotSession
-from app.schemas import ApplicationStatus
+from app.i18n.service import translate
+from app.schemas import ApplicationStatus, Locale
+from app.scoring.rules import DIMENSION_MAXIMA, SCORING_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +49,7 @@ def answer_question(
     settings: Settings,
     *,
     provider_call: Callable[[str, CopilotContext, Settings], GroundedAnswer] | None = None,
+    locale: Locale = "en",
 ) -> GroundedAnswer:
     """Answer from the selected context without writes or unrelated/private records."""
     allowed_sources = _context_source_ids(context)
@@ -55,10 +58,43 @@ def answer_question(
     if provider_call is not None:
         answer = provider_call(message, context, settings)
     else:
-        # The local fallback deliberately quotes selected evidence instead of inventing prose.
+        # Bounded source excerpts, never free-form factual guesses.
+        heading = f"{context.job.company[:200]} — {context.job.title[:300]}"
+        source_ids = [f"job:{context.job.id}"]
+        score_text = ""
+        if context.analysis is not None:
+            band_keys = {
+                "Must Apply": "score.must_apply",
+                "Strong Apply": "score.strong_apply",
+                "Selective": "score.selective",
+                "Skip": "score.skip",
+            }
+            band = context.analysis.recommendation
+            recommendation = translate(locale, band_keys[band]) if band in band_keys else band
+            score_text = translate(
+                locale,
+                "copilot.answer.score",
+                score=context.analysis.fit_score,
+                recommendation=recommendation,
+            )
+            if context.analysis.scoring_version == SCORING_VERSION:
+                for name, maximum in DIMENSION_MAXIMA.items():
+                    key = "score.build_ship" if name == "build_and_ship" else f"score.{name}"
+                    value = context.analysis.score_breakdown.get(name, 0)
+                    score_text += f"\n{translate(locale, key)}: {value}/{maximum}"
+                if context.analysis.score_details.get("critical_warnings"):
+                    score_text += "\n" + translate(locale, "analysis.pmo_warning")
+            else:
+                score_text += "\n" + translate(locale, "analysis.legacy")
+            source_ids.append(f"job_analysis:{context.analysis.id}")
+        prefix = f"{heading}\n{score_text}\n{translate(locale, 'copilot.answer.evidence')}\n"
+        budget = 3990 - len(prefix)
+        excerpt = context.job.description[:budget]
+        if len(context.job.description) > budget:
+            excerpt = excerpt.rsplit(" ", 1)[0] + " …"
         answer = GroundedAnswer(
-            answer=(f"{context.job.company} — {context.job.title}: {context.job.description}"),
-            source_ids=[f"job:{context.job.id}"],
+            answer=prefix + excerpt,
+            source_ids=source_ids,
         )
     if not set(answer.source_ids).issubset(allowed_sources):
         raise CopilotSessionError("Copilot answer cited a record outside the selected context")

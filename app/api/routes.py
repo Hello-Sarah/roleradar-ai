@@ -59,6 +59,7 @@ from app.schemas import (
     DashboardRead,
     DigestRead,
     GeneratedCVRead,
+    JobCompanyUpdate,
     JobCreate,
     JobPasteCreate,
     JobRead,
@@ -78,6 +79,7 @@ from app.services.cv_service import (
 from app.services.job_service import (
     DuplicateJobError,
     add_application_event,
+    attach_job_company,
     create_and_analyze_job,
     get_daily_digest,
     get_dashboard,
@@ -199,6 +201,14 @@ def read_jobs(
 def read_job(job_id: int, db: Db) -> JobRead:
     try:
         return to_job_read(get_job(db, job_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.patch("/jobs/{job_id}/company", response_model=JobRead)
+def attach_company_to_job(job_id: int, payload: JobCompanyUpdate, db: Db) -> JobRead:
+    try:
+        return to_job_read(attach_job_company(db, job_id, payload.company_id))
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -583,14 +593,18 @@ def answer_copilot_question(
             db,
         )
         db.rollback()
-        answer = answer_question(payload.message, context, settings)
+        answer = answer_question(payload.message, context, settings, locale=payload.locale)
         add_message(
             db,
             payload.session_id,
             CopilotMessageCreate(
                 role="assistant",
                 body=answer.answer,
-                sources=[source.model_dump(mode="json") for source in context.sources],
+                sources=[
+                    source.model_dump(mode="json")
+                    for source in context.sources
+                    if f"{source.record_type}:{source.record_id}" in answer.source_ids
+                ],
             ),
         )
         return answer

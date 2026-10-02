@@ -171,7 +171,7 @@ def test_prompt_injection_cannot_override_deterministic_score_or_schema() -> Non
 
 def test_explanation_provider_receives_bounded_timeout_without_affecting_score() -> None:
     from app.analysis.classifier import classify_job
-    from app.analysis.explainer import LLMExplanation, explain_fit
+    from app.analysis.explainer import EvidenceSelection, PublicEvidenceSelections, explain_fit
     from app.demo.profile import public_demo_profile
     from app.ingestion.text_extractor import extract_job_from_text
     from app.scoring.v2 import JobEvidence, ProfileEvidence, score_job_v2
@@ -184,14 +184,13 @@ def test_explanation_provider_receives_bounded_timeout_without_affecting_score()
     )
     received_timeouts: list[float | None] = []
 
-    def provider(prompt: dict[str, object], timeout_seconds: float | None) -> LLMExplanation:
+    def provider(
+        prompt: dict[str, object], timeout_seconds: float | None
+    ) -> PublicEvidenceSelections:
         received_timeouts.append(timeout_seconds)
         assert prompt["deterministic_result"] is not None
-        return LLMExplanation(
-            strengths=["SUPPORTED_STRENGTH"],
-            gaps=["SUPPORTED_GAP"],
-            evidence=["jd-001: supported evidence"],
-            summary="The deterministic score remains the source of truth for this assessment.",
+        return PublicEvidenceSelections(
+            selections=[EvidenceSelection(evidence_id="jd-title", label="summary")]
         )
 
     explanation, source = explain_fit(
@@ -204,7 +203,8 @@ def test_explanation_provider_receives_bounded_timeout_without_affecting_score()
         timeout_seconds=2.5,
     )
 
-    assert explanation.summary.startswith("The deterministic score")
+    assert "deterministic fit score" in explanation.summary
+    assert explanation.evidence == [job.title]
     assert source == "gpt-4.1-mini"
     assert received_timeouts == [2.5]
 

@@ -21,7 +21,48 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import TIMESTAMP
 
-from app.database.session import _matches_legacy_column, upgrade_database
+from alembic import command
+from app.database.session import _alembic_config, _matches_legacy_column, upgrade_database
+
+
+def test_final_fix_job_company_migration_downgrade_preserves_job_history(tmp_path) -> None:
+    url = f"sqlite:///{tmp_path / 'final-fix-roundtrip.db'}"
+    upgrade_database(url)
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(text("PRAGMA foreign_keys=ON"))
+        connection.execute(
+            text(
+                "INSERT INTO jobs (id, fingerprint, company, title, location, description, "
+                "source, status, created_at, updated_at, watchlist_company_id) "
+                "VALUES (1, 'migration-only', 'Synthetic', 'Engineer', 'Hong Kong', "
+                "'Build systems', 'manual', 'New', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, "
+                "(SELECT id FROM watchlist_companies LIMIT 1))"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO application_events (job_id, status, occurred_at, created_at, "
+                "updated_at) VALUES (1, 'New', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, "
+                "CURRENT_TIMESTAMP)"
+            )
+        )
+    engine.dispose()
+
+    command.downgrade(_alembic_config(url), "20260825_05")
+    upgrade_database(url)
+
+    engine = create_engine(url)
+    try:
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT COUNT(*) FROM jobs")).scalar_one() == 1
+            assert (
+                connection.execute(text("SELECT COUNT(*) FROM application_events")).scalar_one()
+                == 1
+            )
+            assert connection.execute(text("PRAGMA foreign_key_check")).all() == []
+    finally:
+        engine.dispose()
 
 
 def table_names(url: str) -> set[str]:

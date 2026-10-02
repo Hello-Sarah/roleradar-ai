@@ -34,12 +34,12 @@ class ProfileLike(Protocol):
 _UNKNOWN_LOCATION = re.compile(r"\b(?:unknown|tbd|to be confirmed|not specified)\b", re.I)
 _US_LOCATION = re.compile(r"\b(?:u\.?s\.?a?|united states)\b", re.I)
 _SPONSORSHIP_AVAILABLE = re.compile(
-    r"\b(?:visa sponsorship (?:is )?available|sponsorship provided|will sponsor)\b", re.I
-)
-_SPONSORSHIP_RESTRICTED = re.compile(
-    r"\b(?:no (?:visa )?sponsorship|must (?:already )?be authorized|"
-    r"(?:u\.?s\.?|united states) work authorization required)\b",
+    r"\b(?:visa sponsorship (?:is )?(?:available|provided)|"
+    r"(?:provide|offer) visa sponsorship|sponsor (?:work )?visas?)\b",
     re.I,
+)
+_NEGATED_AUTHORIZATION = re.compile(
+    r"\b(?:no|not|never|without|cannot|can't|won't|unable|unavailable|must|require[sd]?)\b", re.I
 )
 _STRICT_POSITIVE_GROUPS: tuple[tuple[str, ...], ...] = (
     ("own", "ownership", "accountable", "decision"),
@@ -113,19 +113,27 @@ def _location_status(job: JobLike, profile: ProfileLike) -> tuple[EligibilitySta
 
 
 def _authorization_status(job: JobLike) -> tuple[EligibilityStatus, list[str], bool]:
-    evidence_text = f"{job.location}. {job.description}"
-    if match := _SPONSORSHIP_AVAILABLE.search(evidence_text):
-        return EligibilityStatus.ELIGIBLE, [match.group(0)], False
-    if match := _SPONSORSHIP_RESTRICTED.search(evidence_text):
-        return (
-            EligibilityStatus.UNCLEAR,
-            [f"{match.group(0)}; candidate authorization status is not stored."],
-            True,
-        )
+    # Keep full statements, including negation. Training/event sponsorship is not
+    # visa evidence; uncertainty or conflicting clauses never becomes approval.
+    statements = [
+        part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", job.description) if part.strip()
+    ]
+    evidence = [
+        part
+        for part in statements
+        if re.search(r"\b(?:visas?|sponsor\w*|authoriz\w*)\b", part, re.I)
+    ]
+    positive = [
+        part
+        for part in evidence
+        if _SPONSORSHIP_AVAILABLE.search(part) and not _NEGATED_AUTHORIZATION.search(part)
+    ]
+    if positive and len(positive) == len(evidence):
+        return EligibilityStatus.ELIGIBLE, evidence, False
     return (
         EligibilityStatus.UNCLEAR,
-        ["The job provides no explicit work-authorization evidence."],
-        False,
+        evidence or ["The job provides no explicit work-authorization evidence."],
+        True,
     )
 
 
@@ -155,7 +163,11 @@ def _expected_return(
     strict_passed: bool | None,
     authorization_required_unresolved: bool,
 ) -> ExpectedReturn:
-    if location == EligibilityStatus.INELIGIBLE or strict_passed is False:
+    if (
+        location == EligibilityStatus.INELIGIBLE
+        or strict_passed is False
+        or (score is not None and score < 55)
+    ):
         return ExpectedReturn.SKIP
     if authorization_required_unresolved:
         return ExpectedReturn.RELATIONSHIP_ONLY

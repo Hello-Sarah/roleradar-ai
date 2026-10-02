@@ -76,3 +76,27 @@ def render_page(client: RoleRadarClient, locale: Locale) -> None:
         return
     for job in jobs:
         render_job_card(job, region="jobs-library", locale=locale, client=client)
+        toggle = f"jobs-company-open-{job['id']}"
+        if st.button(translate(locale, "jobs.associate_company"), key=f"jobs-company-{job['id']}"):
+            st.session_state[toggle] = not st.session_state.get(toggle, False)
+        if st.session_state.get(toggle):
+            companies = client.get("/api/v1/watchlist/companies")
+            labels = {
+                None: translate(locale, "jobs.no_company"),
+                **{item["id"]: item["name"] for item in companies},
+            }
+            ids = list(labels)
+            current_id = job.get("watchlist_company_id")
+            selected = st.selectbox(
+                translate(locale, "jobs.watchlist_company"),
+                ids,
+                index=ids.index(current_id) if current_id in ids else 0,
+                format_func=lambda value, labels=labels: labels[value],
+                key=f"jobs-company-select-{job['id']}",
+            )
+            if st.button(
+                translate(locale, "jobs.save_association"), key=f"jobs-company-save-{job['id']}"
+            ):
+                client.patch(f"/api/v1/jobs/{job['id']}/company", {"company_id": selected})
+                st.session_state[toggle] = False
+                st.rerun()

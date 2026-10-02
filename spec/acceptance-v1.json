@@ -87,6 +87,8 @@
       },
       "additional_checks": [
         {"kind": "pytest", "name": "tests.test_url_fetcher::test_accepts_public_job_url"},
+        {"kind": "pytest", "name": "tests.test_url_fetcher::test_rr_f01_rebinding_never_connects_to_second_hostname_answer"},
+        {"kind": "pytest", "name": "tests.test_url_fetcher::test_rr_f01_real_transport_pins_redirects_tls_and_ignores_ambient_proxy"},
         {"kind": "pytest", "name": "tests.test_url_fetcher::test_public_url_safeguards_reject_redirect_size_and_timeout"},
         {"kind": "pytest", "name": "tests.test_api::test_preview_job_from_url_stays_unsaved_until_edited_confirmation"}
       ]
@@ -125,16 +127,23 @@
       "automated_check": {
         "kind": "eval",
         "name": "jd-evidence-ids"
-      }
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_explainer::test_rr_f03_private_analysis_rejects_schema_valid_fabricated_summary"}
+      ]
     },
     {
       "id": "SCORE-004",
       "must": true,
       "visual_required": false,
       "automated_check": {
-        "kind": "eval",
-        "name": "jd-pmo-detection"
-      }
+        "kind": "e2e",
+        "name": "tests/e2e/test_final_review_decisions.py::test_rr_f04_f05_f06_pmo_decision_and_grounded_question_in_both_locales"
+      },
+      "additional_checks": [
+        {"kind": "eval", "name": "jd-pmo-detection"},
+        {"kind": "pytest", "name": "tests.test_final_review_ui::test_rr_f05_actual_job_card_shows_all_dimensions_pmo_warning_and_versions", "required_case_ids": ["[en]", "[zh-Hans]"]}
+      ]
     },
     {
       "id": "SCORE-005",
@@ -218,7 +227,12 @@
       "automated_check": {
         "kind": "pytest",
         "name": "tests.test_watchlist::test_company_tier_does_not_set_job_score_or_force_apply_now"
-      }
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_final_review_ui::test_rr_f06_attached_job_api_exposes_independent_eligibility", "required_case_ids": ["[Hong Kong-eligible]", "[Remote USA-ineligible]"]},
+        {"kind": "pytest", "name": "tests.test_final_review_ui::test_rr_f06_rendered_company_selection_displays_job_evidence_separately", "required_case_ids": ["[en]", "[zh-Hans]"]},
+        {"kind": "e2e", "name": "tests/e2e/test_final_review_decisions.py::test_rr_f04_f05_f06_pmo_decision_and_grounded_question_in_both_locales"}
+      ]
     },
     {
       "id": "WATCH-005",
@@ -227,7 +241,11 @@
       "automated_check": {
         "kind": "pytest",
         "name": "tests.test_watchlist::test_job_location_eligibility_uses_explicit_evidence"
-      }
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_watchlist::test_rr_f07_negative_conflicting_and_nonvisa_sponsorship_is_not_approval", "minimum_cases": 5},
+        {"kind": "e2e", "name": "tests/e2e/test_final_review_decisions.py::test_rr_f06_us_remote_unknown_authorization_is_visible_end_to_end"}
+      ]
     },
     {
       "id": "WATCH-006",
@@ -275,7 +293,10 @@
       "automated_check": {
         "kind": "eval",
         "name": "cv-factual-support"
-      }
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_cv_service::test_rr_f02_metadata_cannot_support_cv_claim_before_file_creation", "required_case_ids": ["[AWS Certified Solutions Architect]", "[SOURCE CV]"]}
+      ]
     },
     {
       "id": "CV-004",
@@ -317,7 +338,11 @@
       "automated_check": {
         "kind": "pytest",
         "name": "tests.test_copilot_context::test_job_context_excludes_unattached_cv_and_unrelated_job"
-      }
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_final_review_ui::test_rr_f04_rendered_copilot_question_persists_answer_and_citations_without_proposal", "required_case_ids": ["[question-en]", "[question-zh-Hans]", "[discussion-en]", "[discussion-zh-Hans]"]},
+        {"kind": "pytest", "name": "tests.test_copilot_api::test_rr_f08_long_jd_answer_is_bounded_and_cited", "required_case_ids": ["[3900]", "[3999]", "[4000]", "[4001]", "[4589]", "[20000]"]}
+      ]
     },
     {
       "id": "CHAT-003",
@@ -326,7 +351,10 @@
       "automated_check": {
         "kind": "eval",
         "name": "copilot-grounded-answer"
-      }
+      },
+      "additional_checks": [
+        {"kind": "e2e", "name": "tests/e2e/test_final_review_decisions.py::test_rr_f04_f05_f06_pmo_decision_and_grounded_question_in_both_locales"}
+      ]
     },
     {
       "id": "CHAT-004",
@@ -351,6 +379,7 @@
       },
       "additional_checks": [
         {"kind": "pytest", "name": "tests.test_copilot_actions::test_proposal_creation_writes_no_business_rows_and_confirmation_is_idempotent"},
+        {"kind": "pytest", "name": "tests.test_copilot_actions::test_rr_f09_newest_event_invalidates_followup_preview_even_when_date_is_equal", "required_case_ids": ["[None]", "[2026-10-01]"]},
         {"kind": "pytest", "name": "tests.test_dashboard_components::test_copilot_confirmation_exposes_every_mandatory_field_in_both_languages"}
       ]
     },

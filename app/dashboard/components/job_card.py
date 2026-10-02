@@ -11,6 +11,7 @@ from app.dashboard.components.states import low_confidence_label
 from app.dashboard.state import select_job_context, stable_key
 from app.i18n.service import translate
 from app.schemas import ApplicationStatus, Locale
+from app.scoring.rules import DIMENSION_MAXIMA, SCORING_VERSION
 
 _STATUS_KEYS = {
     status.value: f"application_status.{status.value.casefold()}" for status in ApplicationStatus
@@ -82,6 +83,45 @@ def render_job_card(
         st.subheader(f"{job['company']} — {job['title']}")
         st.caption(f"{job['location']} · {score if score is not None else '—'}/100")
         if analysis:
+            details = analysis.get("score_details") or {}
+            evidence_by_id = {item["id"]: item["text"] for item in details.get("evidence", [])}
+            for critical in details.get("critical_warnings", []):
+                st.error(f"{translate(locale, 'analysis.pmo_warning')} · {critical['code']}")
+                for evidence_id in critical.get("evidence_ids", []):
+                    st.write(f"{evidence_id}: {evidence_by_id.get(evidence_id, '—')}")
+            version = analysis.get("scoring_version", "unknown")
+            st.caption(
+                f"{translate(locale, 'score.scoring_version')}: {version} · "
+                f"{translate(locale, 'analysis.profile_version')}: "
+                f"{analysis.get('profile_version', '—')} · "
+                f"{translate(locale, 'copilot.field.analysis_id')}: {analysis.get('id', '—')}"
+            )
+            if version != SCORING_VERSION:
+                st.warning(translate(locale, "analysis.legacy"))
+            else:
+                for dimension, maximum in DIMENSION_MAXIMA.items():
+                    label_key = (
+                        "score.build_ship"
+                        if dimension == "build_and_ship"
+                        else f"score.{dimension}"
+                    )
+                    value = analysis.get("score_breakdown", {}).get(dimension, "—")
+                    st.write(f"{translate(locale, label_key)}: {value}/{maximum}")
+                    item = details.get("dimensions", {}).get(dimension, {})
+                    for evidence_id in item.get("evidence_ids", []):
+                        st.caption(f"{evidence_id}: {evidence_by_id.get(evidence_id, '—')}")
+            for field, label, red in [
+                ("matched_green_flags", "analysis.green_flags", False),
+                ("matched_red_flags", "analysis.red_flags", True),
+            ]:
+                st.markdown(f"**{translate(locale, label)}**")
+                flags = details.get(field, [])
+                st.write(
+                    ", ".join(
+                        analysis_signal_label(locale, flag["code"], gap=red) for flag in flags
+                    )
+                    or "—"
+                )
             st.write(
                 translate(
                     locale,
@@ -115,6 +155,29 @@ def render_job_card(
                     or "—"
                 )
         confidence = float(classification.get("confidence", 0))
+        eligibility = job.get("eligibility")
+        if eligibility:
+            st.markdown(f"**{translate(locale, 'jobs.eligibility')}**")
+            st.caption(job.get("watchlist_company_name") or "—")
+            for field in ("location_eligibility", "work_authorization"):
+                label = translate(locale, "watch_list.eligibility." + eligibility[field])
+                st.write(f"{translate(locale, 'jobs.' + field)}: {label}")
+            label = translate(locale, "jobs.return." + eligibility["expected_return"])
+            st.write(f"{translate(locale, 'jobs.expected_return')}: {label}")
+            if eligibility.get("strict_filter_passed") is not None:
+                st.write(
+                    translate(
+                        locale,
+                        "jobs.strict_pass"
+                        if eligibility["strict_filter_passed"]
+                        else "jobs.strict_fail",
+                    )
+                )
+            for field in ("location_evidence", "work_authorization_evidence", "job_evidence"):
+                for item in eligibility.get(field, []):
+                    st.write(f"• {item}")
+            st.markdown(f"**{translate(locale, 'jobs.company_rationale')}**")
+            st.write(eligibility["inherited_company_rationale"])
         warning = low_confidence_label(locale, confidence)
         if warning:
             st.warning(translate(locale, "analysis.needs_review_bilingual"))

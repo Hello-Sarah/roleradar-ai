@@ -79,6 +79,10 @@ class Job(TimestampMixin, Base):
     description: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(100), default="manual")
     status: Mapped[str] = mapped_column(String(30), default="New", index=True)
+    watchlist_company_id: Mapped[int | None] = mapped_column(
+        ForeignKey("watchlist_companies.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    watchlist_company: Mapped["WatchListCompany | None"] = relationship()
 
     classification: Mapped["JobClassification | None"] = relationship(
         back_populates="job", cascade="all, delete-orphan", uselist=False
@@ -180,6 +184,7 @@ class GeneratedCV(Base):
     output_hash: Mapped[str] = mapped_column(String(64))
     source_cv_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
     source_cv_hashes: Mapped[dict[str, str]] = mapped_column(JSON, default=dict)
+    source_evidence: Mapped[list[dict[str, object]]] = mapped_column(JSON, default=list)
     model_version: Mapped[str] = mapped_column(String(200))
     prompt_version: Mapped[str] = mapped_column(String(100))
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

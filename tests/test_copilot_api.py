@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from app.database.models import CopilotActionAudit, CopilotMessage
@@ -225,3 +226,32 @@ def test_grounded_answer_uses_selected_context_and_persists_citations(
     messages = client.get(f"/api/v1/copilot/sessions/{session['id']}/messages").json()
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["sources"] == [{"record_type": "job", "record_id": job.id, "version": None}]
+
+
+@pytest.mark.parametrize("length", [3900, 3999, 4000, 4001, 4589, 20000])
+def test_rr_f08_long_jd_answer_is_bounded_and_cited(client, length):
+    created = client.post(
+        "/api/v1/jobs",
+        json={
+            "company": "Synthetic",
+            "title": "AI Engineer",
+            "location": "Hong Kong",
+            "description": ("Build reliable AI. " * (length // 19 + 1))[:length],
+        },
+    )
+    assert created.status_code == 201
+    job = created.json()
+    session = client.post(
+        "/api/v1/copilot/sessions", json={"title": "Question", "locale": "en"}
+    ).json()
+    response = client.post(
+        "/api/v1/copilot/answer",
+        json={
+            "session_id": session["id"],
+            "job_id": job["id"],
+            "message": "Why is this score low?",
+        },
+    )
+    assert response.status_code == 201, response.text
+    assert 0 < len(response.json()["answer"]) <= 4000
+    assert f"job:{job['id']}" in response.json()["source_ids"]

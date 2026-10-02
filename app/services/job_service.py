@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.analysis.classifier import classify_job
 from app.analysis.explainer import explain_fit
@@ -17,6 +17,7 @@ from app.database.models import (
     Job,
     JobAnalysis,
     JobClassification,
+    WatchListCompany,
 )
 from app.ingestion.normalizer import job_fingerprint, normalize_job
 from app.schemas import (
@@ -43,6 +44,8 @@ from app.services.profile_service import (
     get_or_create_profile_version,
     to_profile_read,
 )
+from app.services.reminder_state import latest_application_event
+from app.watchlist.eligibility import evaluate_job_eligibility
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +71,7 @@ def _job_query():
             selectinload(Job.classification),
             selectinload(Job.analyses).selectinload(JobAnalysis.profile_snapshot),
             selectinload(Job.application_events),
+            selectinload(Job.watchlist_company),
         )
         .execution_options(populate_existing=True)
     )
@@ -109,6 +113,16 @@ def to_job_read(job: Job) -> JobRead:
     analysis = None
     if job.analysis:
         analysis = to_analysis_read(job.analysis)
+    eligibility = None
+    if job.watchlist_company is not None:
+        db = object_session(job)
+        profile = (
+            db.scalar(select(CandidateProfile).order_by(CandidateProfile.id).limit(1))
+            if db
+            else None
+        )
+        if profile is not None:
+            eligibility = evaluate_job_eligibility(job, job.watchlist_company, profile)
     return JobRead(
         id=job.id,
         company=job.company,
@@ -121,6 +135,9 @@ def to_job_read(job: Job) -> JobRead:
         status=job.status,
         created_at=job.created_at,
         updated_at=job.updated_at,
+        watchlist_company_id=job.watchlist_company_id,
+        watchlist_company_name=job.watchlist_company.name if job.watchlist_company else None,
+        eligibility=eligibility,
         classification=classification,
         analysis=analysis,
         application_events=[
@@ -309,6 +326,16 @@ def get_job(db: Session, job_id: int) -> Job:
     return job
 
 
+def attach_job_company(db: Session, job_id: int, company_id: int | None) -> Job:
+    job = get_job(db, job_id)
+    company = db.get(WatchListCompany, company_id) if company_id is not None else None
+    if company_id is not None and company is None:
+        raise LookupError("Watch List company not found")
+    job.watchlist_company = company
+    db.commit()
+    return get_job(db, job_id)
+
+
 def list_jobs(
     db: Session,
     *,
@@ -460,11 +487,7 @@ def get_dashboard(db: Session, *, as_of: datetime | None = None) -> DashboardRea
     for job in jobs:
         if job.status in terminal_statuses:
             continue
-        latest_event = max(
-            job.application_events,
-            key=lambda event: (event.occurred_at, event.id),
-            default=None,
-        )
+        latest_event = latest_application_event(job)
         if latest_event and latest_event.next_follow_up_date is not None:
             follow_up_date = latest_event.next_follow_up_date
         else:

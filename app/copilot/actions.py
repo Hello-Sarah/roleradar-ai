@@ -48,6 +48,7 @@ from app.services.job_service import (
     prepare_reanalysis,
     update_status,
 )
+from app.services.reminder_state import reminder_snapshot
 from app.watchlist.service import (
     DuplicateWatchListCompanyError,
     create_company,
@@ -83,6 +84,8 @@ def _job(db: Session, target_id: int) -> Job:
     job = db.get(Job, target_id)
     if job is None:
         raise ActionProposalError("The target job does not exist")
+    db.refresh(job)
+    db.expire(job, ["application_events"])
     return job
 
 
@@ -152,22 +155,9 @@ def _proposal_preview(
         job = _job(db, proposal.target_id)
         if job.status != proposal.expected_status.value:
             raise ActionProposalError("The proposal's current status does not match the target job")
-        current_follow_up = next(
-            (
-                event.next_follow_up_date
-                for event in job.application_events
-                if event.next_follow_up_date is not None
-            ),
-            None,
-        )
         return (
             "job",
-            {
-                "status": job.status,
-                "next_follow_up_date": (
-                    current_follow_up.isoformat() if current_follow_up else None
-                ),
-            },
+            reminder_snapshot(job),
             {"next_follow_up_date": proposal.follow_up_date.isoformat()},
             ["Append one follow-up timeline event without changing the current status"],
             private,
@@ -447,23 +437,7 @@ def _execute(
         return {"job": [job.id], "application_event": [event.id]}, None
     if isinstance(proposal, SetFollowUpProposal):
         job = _job(db, proposal.target_id)
-        current_follow_up = next(
-            (
-                event.next_follow_up_date
-                for event in job.application_events
-                if event.next_follow_up_date is not None
-            ),
-            None,
-        )
-        _assert_snapshot(
-            record,
-            {
-                "status": job.status,
-                "next_follow_up_date": (
-                    current_follow_up.isoformat() if current_follow_up else None
-                ),
-            },
-        )
+        _assert_snapshot(record, reminder_snapshot(job))
         event = add_application_event(
             db,
             job.id,

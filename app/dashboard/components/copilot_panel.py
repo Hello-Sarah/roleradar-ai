@@ -54,6 +54,7 @@ _CONFIRMATION_FIELD_KEYS = {
     "notes": "copilot.field.notes",
     "next_follow_up_date": "copilot.field.next_follow_up_date",
     "analysis_id": "copilot.field.analysis_id",
+    "application_event_id": "copilot.field.application_event_id",
     "generated_cv": "copilot.field.generated_cv",
     "source_cv_ids": "copilot.field.source_cv_ids",
     "item_kind": "copilot.field.item_kind",
@@ -473,8 +474,35 @@ def _render_copilot_panel(
             f"/api/v1/copilot/sessions/{session_id}/messages",
             {"role": "user", "body": prompt, "sources": []},
         )
-        proposal = client.post(
-            "/api/v1/copilot/propose",
+        # Read-only discussion has its own contract and cannot propose writes.
+        normalized = prompt.strip().casefold().removeprefix("please ").removeprefix("请")
+        action_request = normalized.startswith(
+            (
+                "save ",
+                "change ",
+                "mark ",
+                "record ",
+                "set ",
+                "create ",
+                "add ",
+                "update ",
+                "reanalyze ",
+                "generate ",
+                "保存",
+                "更改",
+                "标记",
+                "记录",
+                "设置",
+                "创建",
+                "添加",
+                "更新",
+                "重新分析",
+                "生成",
+            )
+        )
+        readonly = not action_request or prompt.rstrip().endswith(("?", "？"))
+        response = client.post(
+            "/api/v1/copilot/answer" if readonly else "/api/v1/copilot/propose",
             {
                 "session_id": session_id,
                 "message": prompt,
@@ -482,9 +510,11 @@ def _render_copilot_panel(
                 "job_id": context.job_id,
                 "company_id": context.company_id,
                 "cv_document_ids": list(context.cv_document_ids),
+                "locale": locale,
             },
         )
-        st.session_state["copilot.pending_proposal"] = proposal
+        if not readonly:
+            st.session_state["copilot.pending_proposal"] = response
         st.rerun()
 
     if not proposal:

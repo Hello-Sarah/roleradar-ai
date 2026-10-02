@@ -154,6 +154,7 @@ class ModelActionProposal(StrictContract):
 
 
 class ActionIntentRequest(StrictContract):
+    locale: Literal["en", "zh-Hans"] = "en"
     session_id: int
     message: str = Field(min_length=1, max_length=20_000)
     route: str | None = Field(default=None, max_length=500)

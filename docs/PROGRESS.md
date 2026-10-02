@@ -4,6 +4,17 @@ Last updated: 2026-10-02
 
 ## Current status
 
+Final whole-branch review at `8e80b9f` required changes (RR-F01–RR-F09).
+The final fix candidate adds pinned URL connections, document-body CV evidence maps,
+selection-only private explanations, real bilingual Copilot answers, visible dimension/flag/PMO
+detail, explicit Jobs → Watch List company association with independent eligibility, conservative
+visa polarity, bounded answer excerpts, and event-version-bound follow-up confirmation.
+The strengthened catalog now requires rendered/API and dual-browser decision flows, not helpers
+alone. Exact fresh verification and immutable full-SHA bundle are in
+`.superpowers/sdd/2026-08-25-role-radar-v1/final-fix-report.md`; independent final re-review remains
+required. No push/merge is authorized. Safari smoke, human signoff/25 labels, live-provider quality,
+actual Docker/PostgreSQL runtime, assistive-tech and publication privacy review remain pending.
+
 The production-quality MVP foundation is implemented as a modular monolith using
 FastAPI, Pydantic, SQLAlchemy, Streamlit, PostgreSQL-compatible persistence, Docker,
 and GitHub Actions.

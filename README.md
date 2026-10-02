@@ -6,6 +6,19 @@ skill gaps, and choose a next action. It is intentionally not a job board.
 
 ## Product value
 
+The final V1 review candidate is not a human-signed-off release. See
+[current handoff](docs/HANDOFF.md) for the review status and remaining Safari, human-label,
+live-provider and Docker/PostgreSQL verification boundaries.
+
+In **Jobs**, use **Associate company** to explicitly attach a saved role to a Watch List company.
+The card shows independent location/authorization/Strict Filter evidence and expected return;
+company rationale is separate and never contributes JD scoring evidence. Scores, all six
+dimensions, red/green flags, critical PMO warnings and version context are visible on the card.
+In Career Copilot, normal questions receive a read-only, cited answer in the current UI language;
+action requests still require a separate confirmation. Long JDs are presented as bounded excerpts.
+Private explanations select verified JD evidence, and generated CV claims must map to a specific
+source document body, never its filename. Apply the current Alembic head before starting the API.
+
 - Extract and normalize a job description pasted as text or fetched from a public URL, with an
   editable review step before it is saved.
 - Classify the role and calculate an evidence-backed, deterministic Career Fit Score. The LLM can
