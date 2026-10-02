@@ -43,9 +43,16 @@ Use human-reviewed labels for subjective career value. A model grader may assess
 relevance or clarity, but it cannot be the sole grader for factual support, action safety, or release
 pass/fail. Composite scores never hide a zero-tolerance safety failure.
 
-Every Eval item stores dataset version, item ID, input hash, expected label/range, output, grader
-version, per-grader result, aggregate result, model identifier, prompt version, and latency. Private
-text is referenced by protected ID in reports rather than copied.
+The committed dataset stores inputs and expected labels/ranges only. The release runner invokes the
+candidate commit's deterministic product implementation through suite adapters; observed output is
+written only to the generated Eval evidence. A committed, dataset-supplied `actual` value is never
+accepted as execution evidence. Extraction, CV generation, and grounded Copilot adapters exercise
+their production entry points with isolated synthetic fixtures; external model/provider calls are
+replaced by deterministic test providers, never by committed output claims.
+
+Every generated Eval item stores dataset version, item ID, input hash, expected label/range,
+observed output, grader version, per-grader result, aggregate result, model identifier, prompt
+version, and latency. Private text is referenced by protected ID in reports rather than copied.
 
 ## Regression policy
 

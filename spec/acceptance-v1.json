@@ -1,0 +1,465 @@
+{
+  "version": "v1",
+  "criteria": [
+    {
+      "id": "I18N-001",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "e2e",
+        "name": "tests/e2e/test_i18n_visuals.py::test_first_visit_uses_browser_language"
+      }
+    },
+    {
+      "id": "I18N-002",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "e2e",
+        "name": "tests/e2e/test_i18n_visuals.py::test_language_choice_survives_refresh_and_reopen_without_database_changes"
+      }
+    },
+    {
+      "id": "I18N-003",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_i18n::test_catalogs_have_identical_keys"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_dashboard_components::test_component_states_are_fully_localized"},
+        {"kind": "e2e", "name": "tests/e2e/test_i18n_visuals.py::test_bilingual_visual_routes_use_identical_redacted_seed"},
+        {"kind": "e2e", "name": "tests/e2e/test_i18n_visuals.py::test_bilingual_error_state_is_captured"}
+      ]
+    },
+    {
+      "id": "UI-001",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_dashboard_components::test_theme_emits_exact_tokens_focus_and_narrow_screen_guards"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_dashboard_components::test_each_page_region_rejects_multiple_active_primary_actions"},
+        {"kind": "e2e", "name": "tests/e2e/test_i18n_visuals.py::test_bilingual_visual_routes_use_identical_redacted_seed"}
+      ]
+    },
+    {
+      "id": "UI-002",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "e2e",
+        "name": "tests/e2e/test_primary_loop.py::test_primary_loop_and_copilot_are_non_blocking_at_390px"
+      }
+    },
+    {
+      "id": "UI-003",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "accessibility",
+        "name": "dynamic-primary-loop"
+      }
+    },
+    {
+      "id": "JOB-001",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "e2e",
+        "name": "tests/e2e/test_primary_loop.py::test_pasted_job_to_application_watchlist_and_tailored_cv"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_api::test_preview_extraction_does_not_persist_job"},
+        {"kind": "pytest", "name": "tests.test_dashboard_components::test_cancel_extraction_discards_only_unsaved_preview"}
+      ]
+    },
+    {
+      "id": "JOB-002",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_url_fetcher::test_rejects_private_network_job_url"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_url_fetcher::test_accepts_public_job_url"},
+        {"kind": "pytest", "name": "tests.test_url_fetcher::test_rr_f01_rebinding_never_connects_to_second_hostname_answer"},
+        {"kind": "pytest", "name": "tests.test_url_fetcher::test_rr_f01_real_transport_pins_redirects_tls_and_ignores_ambient_proxy"},
+        {"kind": "pytest", "name": "tests.test_url_fetcher::test_public_url_safeguards_reject_redirect_size_and_timeout"},
+        {"kind": "pytest", "name": "tests.test_api::test_preview_job_from_url_stays_unsaved_until_edited_confirmation"}
+      ]
+    },
+    {
+      "id": "JOB-003",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_api::test_full_job_workflow"
+      }
+    },
+    {
+      "id": "SCORE-001",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_scoring_v2::test_six_dimensions_are_bounded_and_total_is_derived_from_them"
+      }
+    },
+    {
+      "id": "SCORE-002",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_scoring_v2::test_recommendation_band_uses_v2_boundaries"
+      }
+    },
+    {
+      "id": "SCORE-003",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "eval",
+        "name": "jd-evidence-ids"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_explainer::test_rr_f03_private_analysis_rejects_schema_valid_fabricated_summary"}
+      ]
+    },
+    {
+      "id": "SCORE-004",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "e2e",
+        "name": "tests/e2e/test_final_review_decisions.py::test_rr_f04_f05_f06_pmo_decision_and_grounded_question_in_both_locales"
+      },
+      "additional_checks": [
+        {"kind": "eval", "name": "jd-pmo-detection"},
+        {"kind": "pytest", "name": "tests.test_final_review_ui::test_rr_f05_actual_job_card_shows_all_dimensions_pmo_warning_and_versions", "required_case_ids": ["[en]", "[zh-Hans]"]}
+      ]
+    },
+    {
+      "id": "SCORE-005",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_analysis_versions::test_explicit_reanalysis_appends_provenance_and_preserves_history"
+      }
+    },
+    {
+      "id": "APP-001",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_api::test_application_record_timeline"
+      }
+    },
+    {
+      "id": "APP-002",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "e2e",
+        "name": "tests/e2e/test_primary_loop.py::test_pasted_job_to_application_watchlist_and_tailored_cv"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_api::test_application_record_timeline"},
+        {"kind": "pytest", "name": "tests.test_api::test_invalid_application_event_is_atomic"},
+        {"kind": "pytest", "name": "tests.test_dashboard_components::test_accessible_date_text_fields_reject_invalid_iso_dates"},
+        {"kind": "pytest", "name": "tests.test_dashboard_components::test_component_states_are_fully_localized"}
+      ]
+    },
+    {
+      "id": "APP-003",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_dashboard::test_dashboard_classifies_due_and_overdue_follow_ups_and_links_jobs"
+      }
+    },
+    {
+      "id": "WATCH-001",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_watchlist_api::test_add_list_edit_and_change_dimensions_independently"
+      }
+    },
+    {
+      "id": "WATCH-002",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_watchlist::test_seed_matches_approved_company_classification_and_is_idempotent"
+      }
+    },
+    {
+      "id": "WATCH-003",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_watchlist_api::test_delete_with_source_history_is_blocked_with_localized_disable_alternative"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_watchlist_api::test_add_list_edit_and_change_dimensions_independently"},
+        {"kind": "pytest", "name": "tests.test_watchlist_api::test_company_enable_and_disable_are_reversible"},
+        {"kind": "pytest", "name": "tests.test_watchlist_api::test_delete_requires_confirmation_but_new_company_can_be_deleted"},
+        {"kind": "pytest", "name": "tests.test_dashboard_components::test_component_states_are_fully_localized"}
+      ]
+    },
+    {
+      "id": "WATCH-004",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_watchlist::test_company_tier_does_not_set_job_score_or_force_apply_now"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_final_review_ui::test_rr_f06_attached_job_api_exposes_independent_eligibility", "required_case_ids": ["[Hong Kong-eligible]", "[Remote USA-ineligible]"]},
+        {"kind": "pytest", "name": "tests.test_final_review_ui::test_rr_f06_rendered_company_selection_displays_job_evidence_separately", "required_case_ids": ["[en]", "[zh-Hans]"]},
+        {"kind": "e2e", "name": "tests/e2e/test_final_review_decisions.py::test_rr_f04_f05_f06_pmo_decision_and_grounded_question_in_both_locales"}
+      ]
+    },
+    {
+      "id": "WATCH-005",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_watchlist::test_job_location_eligibility_uses_explicit_evidence"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_watchlist::test_rr_f07_negative_conflicting_and_nonvisa_sponsorship_is_not_approval", "minimum_cases": 5},
+        {"kind": "e2e", "name": "tests/e2e/test_final_review_decisions.py::test_rr_f06_us_remote_unknown_authorization_is_visible_end_to_end"}
+      ]
+    },
+    {
+      "id": "WATCH-006",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_dashboard_components::test_page_registry_exposes_all_focused_v1_modules"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_watchlist_api::test_source_state_change_requires_reason_and_records_transition"},
+        {"kind": "pytest", "name": "tests.test_dashboard_components::test_watchlist_page_states_source_boundary_without_monitoring_claim"}
+      ]
+    },
+    {
+      "id": "CV-001",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_cv_service::test_scan_cv_library_adds_and_reuses_fingerprint"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_cv_service::test_scan_preserves_source_bytes_and_never_initializes_a_model"},
+        {"kind": "pytest", "name": "tests.test_cv_service::test_scan_supported_formats_and_deactivates_removed_sources"}
+      ]
+    },
+    {
+      "id": "CV-002",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "e2e",
+        "name": "tests/e2e/test_primary_loop.py::test_pasted_job_to_application_watchlist_and_tailored_cv"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_cv_service::test_generation_preserves_source_bytes_and_stores_complete_provenance"},
+        {"kind": "pytest", "name": "tests.test_cv_service::test_scan_preserves_source_bytes_and_never_initializes_a_model"}
+      ]
+    },
+    {
+      "id": "CV-003",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "eval",
+        "name": "cv-factual-support"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_cv_service::test_rr_f02_metadata_cannot_support_cv_claim_before_file_creation", "required_case_ids": ["[AWS Certified Solutions Architect]", "[SOURCE CV]"]}
+      ]
+    },
+    {
+      "id": "CV-004",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_cv_api::test_generate_response_and_download_preserve_the_intended_artifact"
+      },
+      "additional_checks": [
+        {
+          "kind": "pytest",
+          "name": "tests.test_cv_api::test_download_endpoint_rejects_encoded_and_plain_separators",
+          "required_case_ids": [
+            "[..%2Foutside.docx]",
+            "[..%5Coutside.docx]",
+            "[nested%2Fcv.docx]",
+            "[nested/cv.docx]",
+            "[nested\\\\cv.docx]",
+            "[file%00.docx]"
+          ]
+        },
+        {"kind": "pytest", "name": "tests.test_cv_api::test_download_rejects_symlink_escaping_output_directory"}
+      ]
+    },
+    {
+      "id": "CHAT-001",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_copilot_context::test_opening_context_does_not_initialize_or_call_a_model"
+      }
+    },
+    {
+      "id": "CHAT-002",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_copilot_context::test_job_context_excludes_unattached_cv_and_unrelated_job"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_final_review_ui::test_rr_f04_rendered_copilot_question_persists_answer_and_citations_without_proposal", "required_case_ids": ["[question-en]", "[question-zh-Hans]", "[discussion-en]", "[discussion-zh-Hans]"]},
+        {"kind": "pytest", "name": "tests.test_copilot_api::test_rr_f08_long_jd_answer_is_bounded_and_cited", "required_case_ids": ["[3900]", "[3999]", "[4000]", "[4001]", "[4589]", "[20000]"]}
+      ]
+    },
+    {
+      "id": "CHAT-003",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "eval",
+        "name": "copilot-grounded-answer"
+      },
+      "additional_checks": [
+        {"kind": "e2e", "name": "tests/e2e/test_final_review_decisions.py::test_rr_f04_f05_f06_pmo_decision_and_grounded_question_in_both_locales"}
+      ]
+    },
+    {
+      "id": "CHAT-004",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "eval",
+        "name": "copilot-action-schema"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_copilot_actions::test_typed_union_accepts_every_allowed_action_and_rejects_forbidden_actions"},
+        {"kind": "pytest", "name": "tests.test_copilot_actions::test_all_deterministic_allowed_actions_execute_through_domain_boundaries"}
+      ]
+    },
+    {
+      "id": "CHAT-005",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "e2e",
+        "name": "tests/e2e/test_copilot_confirmation.py::test_copilot_requires_keyboard_reachable_confirmation_before_write"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_copilot_actions::test_proposal_creation_writes_no_business_rows_and_confirmation_is_idempotent"},
+        {"kind": "pytest", "name": "tests.test_copilot_actions::test_rr_f09_newest_event_invalidates_followup_preview_even_when_date_is_equal", "required_case_ids": ["[None]", "[2026-10-01]"]},
+        {"kind": "pytest", "name": "tests.test_dashboard_components::test_copilot_confirmation_exposes_every_mandatory_field_in_both_languages"}
+      ]
+    },
+    {
+      "id": "CHAT-006",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_copilot_actions::test_proposal_creation_writes_no_business_rows_and_confirmation_is_idempotent"
+      }
+    },
+    {
+      "id": "CHAT-007",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_copilot_api::test_conversation_lifecycle_clears_bodies_but_preserves_action_audit"
+      }
+    },
+    {
+      "id": "CHAT-008",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "eval",
+        "name": "copilot-security"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_copilot_actions::test_adversarial_jd_cannot_trigger_automatic_or_ambiguous_action"}
+      ]
+    },
+    {
+      "id": "DASH-001",
+      "must": true,
+      "visual_required": true,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_dashboard_app::test_dashboard_renders_due_follow_ups_and_metric_drill_through"
+      }
+    },
+    {
+      "id": "DIGEST-001",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "pytest",
+        "name": "tests.test_digest::test_empty_digest_keeps_every_signal_category_explicit"
+      },
+      "additional_checks": [
+        {"kind": "pytest", "name": "tests.test_digest::test_digest_uses_persisted_v2_bands_and_excludes_low_value_jobs"}
+      ]
+    },
+    {
+      "id": "EVAL-001",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "eval",
+        "name": "dataset-contract"
+      }
+    },
+    {
+      "id": "EVAL-002",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "eval",
+        "name": "release-thresholds"
+      }
+    },
+    {
+      "id": "REL-001",
+      "must": true,
+      "visual_required": false,
+      "automated_check": {
+        "kind": "release",
+        "name": "all-required-commands"
+      }
+    }
+  ]
+}

@@ -26,15 +26,72 @@ artifacts/acceptance/<version>/<git-commit>/
   defects/
 ```
 
+Successful Chromium and WebKit runs retain named ZIP traces for the desktop primary loop,
+narrow primary loop, and Copilot confirmation under `browser-results/traces/`. The E2E fixtures own
+these contexts so the canonical `--tracing retain-on-failure` plugin option cannot delete successful
+release traces. Each required ZIP must contain Playwright trace events with the named workflow,
+matching browser identity, and completed actions. The six trace paths belong to the E2E command's
+recorded artifact inventory and manifest hashes. Prior bundles without these traces are historical,
+not evidence for the strengthened final-release gate.
+
 `manifest.json` records version, full Git commit, dirty-worktree status, UTC start/end, OS, Python,
 browser versions, model ID, prompt/rubric/dataset versions, command exit codes, and SHA-256 hashes of
-evidence files. A dirty worktree cannot produce release evidence.
+every evidence file. Each command record includes the full HEAD, dirty status, commit time, exact
+canonical argv, evidence-source root, and exhaustive expected artifact paths captured at execution
+time. It also binds the resolved interpreter/tool path, executable SHA-256, and version output. The
+validator resolves each canonical tool independently, so a PATH or basename substitution cannot
+produce release evidence. A dirty worktree, command substitution, stale or copied command
+provenance, missing hash, or unexpected evidence file cannot produce release evidence.
+
+New Task 11 release bundles additionally bind output digests at command completion, not only when
+assembling the bundle. The self-referential JSON command record is hashed by the bundle manifest;
+its referenced screenshot/trace/ledger artifacts are hashed in the command record itself. Later
+artifact substitution cannot be legitimized by recomputing only the final manifest hashes.
+
+Screenshot capture writes `browser-results/screenshot-captures.json` from the actual browser,
+observed URL locale, visible allowlisted system heading/route, visible confirmation/error/dialog
+state, and viewport. It records capture time/run/commit, PNG dimensions, file and decoded-pixel
+digests. The validator checks all 30 slots, exact identities, PNG decoding/CRC/dimensions and unique
+pixel content; EN-to-ZH, browser, route or viewport substitution is invalid. The ledger deliberately
+excludes arbitrary page text, source records and private payloads. Manual visual review remains
+required; semantic capture identity is not an automated pixel-level design assessment.
+
+Each required passing trace has exactly one browser/test/viewport context within the recorded run,
+complete nonempty action identities with successful completions, ordered workflow-specific action
+and expectation checkpoints, DOM snapshots, network stream and referenced replay resources.
+Duplicate archive/content identities, failed actions, missing call IDs/resources, truncated traces
+and minimal event-only traces cannot pass. Compact committed synthetic validator fixtures are not
+release evidence. Historical bundles remain byte-for-byte preserved and are not retroactively
+claimed to satisfy these stronger requirements.
 
 ## Acceptance record fields
 
-Each acceptance ID records requirement, preconditions, steps, expected result, automated evidence,
+Each acceptance ID in the versioned `spec/acceptance-v1.json` catalog records requirement,
+preconditions, steps, expected result, automated evidence,
 visual evidence when required, actual result, Pass/Fail/Blocked, tested time, environment, commit,
-and linked defect. Blocked is not Pass and prevents release for Must items.
+and linked defect. Every catalog criterion names its own automated check. The generator derives its
+status from that named test, browser flow, accessibility result, Eval result, or release gate;
+generic or unconditional Pass records are invalid. Blocked is not Pass and prevents release for
+Must items.
+
+Every named required JUnit case must actually pass. Skipped/xfail/disabled/not-run cases are Blocked,
+including any member of an explicitly required parameterized population; pytest exit zero alone
+does not establish a Must criterion's execution.
+
+The final-review gate also requires integrated product behavior. SCORE-004 must show all six
+stored dimension values and the critical PMO warning with its JD evidence in the real bilingual
+job UI. WATCH-004/005 require explicit company association through the service/API/UI, distinct
+company rationale, Strict Filter results, and the US-remote/unknown-authorization browser case.
+CHAT-002/003 require persisted, cited read-only answers through the rendered panel in both locales,
+not only a test-only answer provider. Required parameter populations cover both locales, question
+and discussion phrasing, long-JD boundaries, CV metadata rejection, and reminder state changes.
+Helper/Eval success alone cannot satisfy these integrated criteria; named browser evidence is
+mandatory in addition to the focused production-path tests.
+
+Automated acceptance does not establish macOS Safari compatibility or human release approval.
+Playwright WebKit is a separate automated target. The Safari smoke, manual assistive-technology
+and visual review, real-provider quality checks, and publication privacy review remain explicit
+manual acceptance items until independently completed and recorded.
 
 ## Required fresh commands
 

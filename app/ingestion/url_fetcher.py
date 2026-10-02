@@ -47,20 +47,27 @@ class _JobPageParser(HTMLParser):
             self.text_parts.append(data.strip())
 
 
-def _validate_public_url(url: str) -> None:
+def _validate_public_url(url: str) -> tuple[str, ...]:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise JobPageFetchError("Only public HTTP or HTTPS job links are supported")
     if parsed.username or parsed.password:
         raise JobPageFetchError("Job links containing credentials are not supported")
     try:
-        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
     except socket.gaierror as exc:
         raise JobPageFetchError("The job link hostname could not be resolved") from exc
     for address in addresses:
         ip = ipaddress.ip_address(address[4][0])
         if not ip.is_global:
             raise JobPageFetchError("Private or local network links are not allowed")
+    if not addresses:
+        raise JobPageFetchError("The job link hostname could not be resolved")
+    return tuple(dict.fromkeys(address[4][0] for address in addresses))
 
 
 def _job_posting_objects(value: Any) -> list[dict[str, Any]]:
@@ -111,11 +118,41 @@ def fetch_job_from_url(url: str) -> JobCreate:
     """Fetch a public job page, extract readable content, and normalize its metadata."""
     current_url = url
     headers = {"User-Agent": "RoleRadarAI/0.1 (+career intelligence; contact site owner)"}
-    with httpx.Client(timeout=15, follow_redirects=False, headers=headers) as client:
+    # Never use ambient proxies: they could independently resolve the vetted hostname.
+    with httpx.Client(
+        timeout=15,
+        follow_redirects=False,
+        headers=headers,
+        trust_env=False,
+        limits=httpx.Limits(max_keepalive_connections=0),
+    ) as client:
         for _ in range(MAX_REDIRECTS + 1):
-            _validate_public_url(current_url)
+            addresses = _validate_public_url(current_url)
+            origin = httpx.URL(current_url)
+            # Connect to a vetted numeric address, but authenticate the original HTTPS
+            # hostname and preserve HTTP authority. No second hostname DNS resolution.
+            pinned = origin.copy_with(host=addresses[0])
             try:
-                response = client.get(current_url)
+                with client.stream(
+                    "GET",
+                    pinned,
+                    headers={"Host": origin.netloc.decode("ascii")},
+                    extensions={"sni_hostname": origin.host},
+                ) as response:
+                    content = bytearray()
+                    for chunk in response.iter_bytes():
+                        content.extend(chunk)
+                        if len(content) > MAX_RESPONSE_BYTES:
+                            raise JobPageFetchError("The job page is too large to analyze")
+                    decoded_headers = dict(response.headers)
+                    decoded_headers.pop("content-encoding", None)
+                    decoded_headers.pop("content-length", None)
+                    response = httpx.Response(
+                        response.status_code,
+                        headers=decoded_headers,
+                        content=bytes(content),
+                        request=response.request,
+                    )
             except httpx.HTTPError as exc:
                 raise JobPageFetchError(f"Could not retrieve the job page: {exc}") from exc
             if response.is_redirect:

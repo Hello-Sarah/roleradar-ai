@@ -1,28 +1,51 @@
+import hashlib
+import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, object_session, selectinload
 
 from app.analysis.classifier import classify_job
 from app.analysis.explainer import explain_fit
 from app.config import Settings
-from app.database.models import CandidateProfile, Job, JobAnalysis, JobClassification
+from app.database.models import (
+    ApplicationEvent,
+    CandidateProfile,
+    Job,
+    JobAnalysis,
+    JobClassification,
+    WatchListCompany,
+)
 from app.ingestion.normalizer import job_fingerprint, normalize_job
 from app.schemas import (
     AnalysisRead,
+    ApplicationEventCreate,
+    ApplicationEventRead,
     ApplicationStatus,
+    CandidateProfileRead,
+    CandidateProfileVersionRead,
     ClassificationRead,
+    DashboardNextActionRead,
     DashboardRead,
     DigestRead,
+    DigestTrendRead,
+    DueFollowUpRead,
     JobCreate,
     JobRead,
-    ScoreBreakdown,
     TrendPoint,
 )
-from app.scoring.engine import score_job
-from app.services.profile_service import get_or_create_profile, to_profile_read
+from app.scoring.rules import PROMPT_VERSION, SCORING_VERSION
+from app.scoring.v2 import JobEvidence, ProfileEvidence, score_job_v2
+from app.services.profile_service import (
+    get_or_create_profile,
+    get_or_create_profile_version,
+    to_profile_read,
+)
+from app.services.reminder_state import latest_application_event
+from app.watchlist.eligibility import evaluate_job_eligibility
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +54,52 @@ class DuplicateJobError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class PreparedJobAnalysis:
+    job_id: int
+    expected_analysis_id: int | None
+    provider_input_fingerprint: str
+    profile_id: int
+    profile_version: str
+    values: dict[str, object]
+
+
 def _job_query():
-    return select(Job).options(selectinload(Job.classification), selectinload(Job.analysis))
+    return (
+        select(Job)
+        .options(
+            selectinload(Job.classification),
+            selectinload(Job.analyses).selectinload(JobAnalysis.profile_snapshot),
+            selectinload(Job.application_events),
+            selectinload(Job.watchlist_company),
+        )
+        .execution_options(populate_existing=True)
+    )
+
+
+def to_analysis_read(analysis: JobAnalysis) -> AnalysisRead:
+    return AnalysisRead(
+        id=analysis.id,
+        job_id=analysis.job_id,
+        profile_id=analysis.profile_id,
+        profile_version_id=analysis.profile_version_id,
+        profile_snapshot=CandidateProfileVersionRead.model_validate(analysis.profile_snapshot),
+        created_at=analysis.created_at,
+        scoring_version=analysis.scoring_version,
+        profile_version=analysis.profile_version,
+        rubric_version=analysis.rubric_version,
+        model_version=analysis.model_version,
+        prompt_version=analysis.prompt_version,
+        fit_score=analysis.fit_score,
+        score_breakdown=analysis.score_breakdown,
+        score_details=analysis.score_details,
+        strengths=analysis.strengths,
+        gaps=analysis.gaps,
+        evidence=analysis.evidence,
+        recommendation=analysis.recommendation,
+        summary=analysis.summary,
+        model_used=analysis.model_used,
+    )
 
 
 def to_job_read(job: Job) -> JobRead:
@@ -45,16 +112,17 @@ def to_job_read(job: Job) -> JobRead:
         )
     analysis = None
     if job.analysis:
-        analysis = AnalysisRead(
-            fit_score=job.analysis.fit_score,
-            score_breakdown=ScoreBreakdown.model_validate(job.analysis.score_breakdown),
-            strengths=job.analysis.strengths,
-            gaps=job.analysis.gaps,
-            evidence=job.analysis.evidence,
-            recommendation=job.analysis.recommendation,
-            summary=job.analysis.summary,
-            model_used=job.analysis.model_used,
+        analysis = to_analysis_read(job.analysis)
+    eligibility = None
+    if job.watchlist_company is not None:
+        db = object_session(job)
+        profile = (
+            db.scalar(select(CandidateProfile).order_by(CandidateProfile.id).limit(1))
+            if db
+            else None
         )
+        if profile is not None:
+            eligibility = evaluate_job_eligibility(job, job.watchlist_company, profile)
     return JobRead(
         id=job.id,
         company=job.company,
@@ -67,9 +135,163 @@ def to_job_read(job: Job) -> JobRead:
         status=job.status,
         created_at=job.created_at,
         updated_at=job.updated_at,
+        watchlist_company_id=job.watchlist_company_id,
+        watchlist_company_name=job.watchlist_company.name if job.watchlist_company else None,
+        eligibility=eligibility,
         classification=classification,
         analysis=analysis,
+        application_events=[
+            ApplicationEventRead.model_validate(event) for event in job.application_events
+        ],
     )
+
+
+def _analysis_values(
+    job: JobCreate,
+    profile: CandidateProfileRead,
+    classification: ClassificationRead,
+    settings: Settings,
+) -> dict[str, object]:
+    score = score_job_v2(
+        JobEvidence(title=job.title, description=job.description),
+        ProfileEvidence(
+            target_roles=profile.target_roles,
+            domain_strengths=profile.domain_strengths,
+            technical_strengths=profile.technical_strengths,
+            development_gaps=profile.development_gaps,
+        ),
+    )
+    details = score.model_dump(mode="json")
+    strengths = [flag.code for flag in score.matched_green_flags]
+    gaps = [
+        weak
+        for dimension in score.dimensions.values()
+        for weak in dimension.missing_or_weak_evidence
+    ]
+    explanation, model_used = explain_fit(
+        job=job,
+        profile=profile,
+        classification=classification,
+        result=score,
+        settings=settings,
+    )
+    return {
+        "scoring_version": SCORING_VERSION,
+        "rubric_version": SCORING_VERSION,
+        "model_version": model_used,
+        "prompt_version": PROMPT_VERSION,
+        "fit_score": score.total_score,
+        "score_breakdown": {name: dimension.score for name, dimension in score.dimensions.items()},
+        "score_details": details,
+        "strengths": strengths or ["NO_MATCHED_GREEN_FLAGS"],
+        "gaps": gaps or ["NO_WEAK_DIMENSIONS"],
+        "evidence": [f"{item.id}: {item.text}" for item in score.evidence],
+        "recommendation": score.recommendation_band,
+        "summary": explanation.summary,
+        "model_used": model_used,
+    }
+
+
+def _job_create_snapshot(job: Job) -> JobCreate:
+    return JobCreate(
+        company=job.company,
+        title=job.title,
+        location=job.location,
+        url=job.url,
+        posting_date=job.posting_date,
+        description=job.description,
+        source=job.source,
+    )
+
+
+def _classification_snapshot(job: Job) -> ClassificationRead:
+    return ClassificationRead(
+        category=job.classification.category,
+        confidence=job.classification.confidence,
+        evidence=list(job.classification.evidence),
+    )
+
+
+def _analysis_input_fingerprint(job: JobCreate, classification: ClassificationRead) -> str:
+    payload = {
+        "job": job.model_dump(mode="json"),
+        "classification": classification.model_dump(mode="json"),
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return f"analysis-input-sha256:{digest}"
+
+
+def _build_analysis(
+    db: Session, job: Job, profile: CandidateProfile, settings: Settings
+) -> JobAnalysis:
+    profile_snapshot = get_or_create_profile_version(db, profile)
+    return JobAnalysis(
+        profile_id=profile.id,
+        profile_snapshot=profile_snapshot,
+        profile_version=profile_snapshot.version,
+        **_analysis_values(
+            _job_create_snapshot(job),
+            to_profile_read(profile),
+            _classification_snapshot(job),
+            settings,
+        ),
+    )
+
+
+def prepare_reanalysis(db: Session, job_id: int, settings: Settings) -> PreparedJobAnalysis:
+    """Read snapshots, close the read transaction, then call the explanation provider."""
+    job = get_job(db, job_id)
+    profile = db.scalar(select(CandidateProfile).order_by(CandidateProfile.id).limit(1))
+    if profile is None:
+        raise ValueError("A candidate profile is required before reanalysis")
+    job_snapshot = _job_create_snapshot(job)
+    profile_snapshot = to_profile_read(profile)
+    classification = _classification_snapshot(job)
+    expected_analysis_id = job.analysis.id if job.analysis else None
+    profile_version = get_or_create_profile_version(db, profile).version
+    # Discard any implicit, uncommitted profile-version insert. It will be recreated only
+    # inside the confirmed write transaction by persist_prepared_reanalysis.
+    db.rollback()
+    values = _analysis_values(job_snapshot, profile_snapshot, classification, settings)
+    return PreparedJobAnalysis(
+        job_id=job_id,
+        expected_analysis_id=expected_analysis_id,
+        provider_input_fingerprint=_analysis_input_fingerprint(job_snapshot, classification),
+        profile_id=profile_snapshot.id,
+        profile_version=profile_version,
+        values=values,
+    )
+
+
+def persist_prepared_reanalysis(db: Session, prepared: PreparedJobAnalysis) -> JobAnalysis:
+    job = get_job(db, prepared.job_id)
+    current_analysis_id = job.analysis.id if job.analysis else None
+    if current_analysis_id != prepared.expected_analysis_id:
+        raise ValueError("The job analysis changed while reanalysis was being prepared")
+    current_input_fingerprint = _analysis_input_fingerprint(
+        _job_create_snapshot(job), _classification_snapshot(job)
+    )
+    if current_input_fingerprint != prepared.provider_input_fingerprint:
+        raise ValueError("The job analysis inputs changed while reanalysis was being prepared")
+    profile = db.get(CandidateProfile, prepared.profile_id)
+    if profile is None:
+        raise ValueError("The candidate profile changed while reanalysis was being prepared")
+    profile_snapshot = get_or_create_profile_version(db, profile)
+    if profile_snapshot.version != prepared.profile_version:
+        raise ValueError("The candidate profile changed while reanalysis was being prepared")
+    analysis = JobAnalysis(
+        profile_id=profile.id,
+        profile_snapshot=profile_snapshot,
+        profile_version=profile_snapshot.version,
+        **prepared.values,
+    )
+    job.analyses.append(analysis)
+    db.flush()
+    return analysis
 
 
 def create_and_analyze_job(db: Session, payload: JobCreate, settings: Settings) -> Job:
@@ -80,20 +302,6 @@ def create_and_analyze_job(db: Session, payload: JobCreate, settings: Settings) 
 
     profile: CandidateProfile = get_or_create_profile(db)
     classification = classify_job(normalized.title, normalized.description)
-    score = score_job(
-        title=normalized.title,
-        location=normalized.location,
-        description=normalized.description,
-        classification=classification,
-        profile=to_profile_read(profile),
-    )
-    explanation, model_used = explain_fit(
-        job=normalized,
-        profile=to_profile_read(profile),
-        classification=classification,
-        result=score,
-        settings=settings,
-    )
     job = Job(
         fingerprint=fingerprint,
         **normalized.model_dump(mode="python", exclude={"url"}),
@@ -101,17 +309,7 @@ def create_and_analyze_job(db: Session, payload: JobCreate, settings: Settings) 
         status=ApplicationStatus.NEW.value,
     )
     job.classification = JobClassification(**classification.model_dump(mode="json"))
-    job.analysis = JobAnalysis(
-        profile_id=profile.id,
-        fit_score=score.fit_score,
-        score_breakdown=score.breakdown.model_dump(),
-        strengths=explanation.strengths,
-        gaps=explanation.gaps,
-        evidence=explanation.evidence,
-        recommendation=score.recommendation.value,
-        summary=explanation.summary,
-        model_used=model_used,
-    )
+    job.analyses.append(_build_analysis(db, job, profile, settings))
     db.add(job)
     try:
         db.commit()
@@ -128,6 +326,16 @@ def get_job(db: Session, job_id: int) -> Job:
     return job
 
 
+def attach_job_company(db: Session, job_id: int, company_id: int | None) -> Job:
+    job = get_job(db, job_id)
+    company = db.get(WatchListCompany, company_id) if company_id is not None else None
+    if company_id is not None and company is None:
+        raise LookupError("Watch List company not found")
+    job.watchlist_company = company
+    db.commit()
+    return get_job(db, job_id)
+
+
 def list_jobs(
     db: Session,
     *,
@@ -135,21 +343,99 @@ def list_jobs(
     min_fit_score: int | None = None,
     limit: int = 100,
 ) -> list[Job]:
-    query = (
-        _job_query().join(Job.analysis, isouter=True).order_by(desc(Job.created_at)).limit(limit)
-    )
+    query = _job_query().order_by(desc(Job.created_at), desc(Job.id)).limit(limit)
     if status:
         query = query.where(Job.status == status.value)
     if min_fit_score is not None:
-        query = query.where(JobAnalysis.fit_score >= min_fit_score)
+        latest_score = (
+            select(JobAnalysis.fit_score)
+            .where(JobAnalysis.job_id == Job.id)
+            .order_by(desc(JobAnalysis.id))
+            .limit(1)
+            .correlate(Job)
+            .scalar_subquery()
+        )
+        query = query.where(latest_score >= min_fit_score)
     return list(db.scalars(query).all())
 
 
-def update_status(db: Session, job_id: int, status: ApplicationStatus) -> Job:
+def list_analyses(db: Session, job_id: int) -> list[JobAnalysis]:
+    get_job(db, job_id)
+    return list(
+        db.scalars(
+            select(JobAnalysis).where(JobAnalysis.job_id == job_id).order_by(desc(JobAnalysis.id))
+        ).all()
+    )
+
+
+def reanalyze_job(
+    db: Session, job_id: int, settings: Settings, *, commit: bool = True
+) -> JobAnalysis:
     job = get_job(db, job_id)
+    profile = get_or_create_profile(db)
+    analysis = _build_analysis(db, job, profile, settings)
+    job.analyses.append(analysis)
+    if commit:
+        db.commit()
+        db.refresh(analysis)
+    else:
+        db.flush()
+    logger.info(
+        "job reanalyzed",
+        extra={
+            "job_id": job_id,
+            "analysis_id": analysis.id,
+            "scoring_version": analysis.scoring_version,
+        },
+    )
+    return analysis
+
+
+def update_status(
+    db: Session, job_id: int, status: ApplicationStatus, *, commit: bool = True
+) -> Job:
+    job = get_job(db, job_id)
+    if job.status == status.value:
+        return job
     job.status = status.value
-    db.commit()
+    job.application_events.append(
+        ApplicationEvent(
+            status=status.value,
+            occurred_at=datetime.now(UTC),
+            notes=f"Status changed to {status.value}",
+        )
+    )
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return get_job(db, job_id)
+
+
+def add_application_event(
+    db: Session, job_id: int, payload: ApplicationEventCreate, *, commit: bool = True
+) -> ApplicationEvent:
+    job = get_job(db, job_id)
+    event = ApplicationEvent(job_id=job.id, **payload.model_dump(mode="python"))
+    job.status = payload.status.value
+    db.add(event)
+    if commit:
+        db.commit()
+        db.refresh(event)
+    else:
+        db.flush()
+    return event
+
+
+def list_application_events(db: Session, job_id: int) -> list[ApplicationEvent]:
+    get_job(db, job_id)
+    return list(
+        db.scalars(
+            select(ApplicationEvent)
+            .where(ApplicationEvent.job_id == job_id)
+            .order_by(desc(ApplicationEvent.occurred_at), desc(ApplicationEvent.id))
+        ).all()
+    )
 
 
 def _gap_counts(jobs: list[Job]) -> list[tuple[str, int]]:
@@ -162,9 +448,22 @@ def _gap_counts(jobs: list[Job]) -> list[tuple[str, int]]:
     return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
 
 
-def get_dashboard(db: Session) -> DashboardRead:
+def _is_v2_high_priority(job: Job) -> bool:
+    analysis = job.analysis
+    return bool(
+        analysis
+        and analysis.scoring_version == SCORING_VERSION
+        and analysis.recommendation in {"Must Apply", "Strong Apply"}
+    )
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def get_dashboard(db: Session, *, as_of: datetime | None = None) -> DashboardRead:
     jobs = list_jobs(db, limit=500)
-    high_priority = [job for job in jobs if job.analysis and job.analysis.fit_score >= 75]
+    high_priority = [job for job in jobs if _is_v2_high_priority(job)]
     status_counts = {status.value: 0 for status in ApplicationStatus}
     for job in jobs:
         status_counts[job.status] = status_counts.get(job.status, 0) + 1
@@ -177,6 +476,47 @@ def get_dashboard(db: Session) -> DashboardRead:
     week_rows = [
         (week, len(scores), sum(scores) / len(scores)) for week, scores in sorted(grouped.items())
     ]
+    now = as_of or datetime.now(UTC)
+    today = now.date()
+    terminal_statuses = {
+        ApplicationStatus.OFFER.value,
+        ApplicationStatus.REJECTED.value,
+        ApplicationStatus.IGNORED.value,
+    }
+    due_follow_ups: list[DueFollowUpRead] = []
+    for job in jobs:
+        if job.status in terminal_statuses:
+            continue
+        latest_event = latest_application_event(job)
+        if latest_event and latest_event.next_follow_up_date is not None:
+            follow_up_date = latest_event.next_follow_up_date
+        else:
+            follow_up_date = None
+        if follow_up_date is not None and follow_up_date <= today:
+            due_follow_ups.append(
+                DueFollowUpRead(
+                    job=to_job_read(job),
+                    next_follow_up_date=follow_up_date,
+                    timing="overdue" if follow_up_date < today else "due",
+                    notes=latest_event.notes,
+                )
+            )
+    due_follow_ups.sort(key=lambda item: (item.next_follow_up_date, item.job.id))
+    if due_follow_ups:
+        first_follow_up = due_follow_ups[0]
+        next_action = DashboardNextActionRead(
+            kind="follow_up",
+            job=first_follow_up.job,
+            follow_up_timing=first_follow_up.timing,
+            next_follow_up_date=first_follow_up.next_follow_up_date,
+        )
+    elif high_priority:
+        next_action = DashboardNextActionRead(
+            kind="review_job",
+            job=to_job_read(high_priority[0]),
+        )
+    else:
+        next_action = None
     return DashboardRead(
         high_priority_jobs=[to_job_read(job) for job in high_priority[:10]],
         recently_added_jobs=[to_job_read(job) for job in jobs[:10]],
@@ -186,23 +526,29 @@ def get_dashboard(db: Session) -> DashboardRead:
             TrendPoint(week=str(week), jobs=count, average_fit_score=round(float(avg or 0), 1))
             for week, count, avg in week_rows
         ],
+        due_follow_ups=due_follow_ups,
+        next_action=next_action,
     )
 
 
-def get_daily_digest(db: Session) -> DigestRead:
+def get_daily_digest(db: Session, *, as_of: datetime | None = None) -> DigestRead:
     jobs = list_jobs(db, limit=500)
-    cutoff = datetime.now(UTC) - timedelta(days=1)
-    recent = [job for job in jobs if job.created_at.replace(tzinfo=UTC) >= cutoff]
-    priority = [job for job in recent if job.analysis and job.analysis.fit_score >= 75]
+    now = as_of or datetime.now(UTC)
+    cutoff = now - timedelta(days=1)
+    recent = [job for job in jobs if cutoff <= _utc(job.created_at) <= now]
+    priority = [job for job in recent if _is_v2_high_priority(job)]
     companies = sorted({job.company for job in recent})
     categories: dict[str, int] = {}
     for job in recent:
         if job.classification:
             key = job.classification.category
             categories[key] = categories.get(key, 0) + 1
-    trends = [f"{category}: {count} new role(s)" for category, count in categories.items()]
+    trends = [
+        DigestTrendRead(category=category, new_roles=count)
+        for category, count in categories.items()
+    ]
     return DigestRead(
-        generated_at=datetime.now(UTC),
+        generated_at=now,
         high_priority_jobs=[to_job_read(job) for job in priority],
         new_companies=companies,
         emerging_skills=_gap_counts(recent)[:5],

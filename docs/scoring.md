@@ -1,4 +1,8 @@
-# Scoring model
+# Scoring model (Legacy V1)
+
+> This document describes the rubric currently implemented in code. The approved target model is
+> [AI Career Fit Score V2](../spec/scoring-v2.md). V2 must be introduced as a versioned migration;
+> existing analyses must not be silently overwritten.
 
 RoleRadar separates deterministic decisions from generative explanation. This makes a
 score repeatable, testable, and inspectable even when no model endpoint is available.
@@ -37,4 +41,3 @@ Before changing weights, create a versioned golden dataset of representative job
 human rankings. Measure classification accuracy, recommendation agreement, gap precision,
 and score stability. Treat user status transitions and explicit feedback as signals, not
 automatic labels. Version the rubric whenever weights or skill aliases change.
-

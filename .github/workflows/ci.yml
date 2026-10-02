@@ -6,6 +6,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      EVIDENCE_DIR: ${{ runner.temp }}/acceptance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -13,6 +15,77 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -e '.[dev]'
-      - run: ruff check .
-      - run: ruff format --check .
-      - run: pytest
+      - run: python -c "import streamlit; assert streamlit.__version__ == '1.62.0'"
+      - run: python -m playwright install --with-deps chromium webkit
+      - run: npm install --prefix "$RUNNER_TEMP/roleradar-node" axe-core@4.10.3
+      - name: Bind trusted Node executable
+        run: echo "ROLERADAR_TRUSTED_NODE_PATH=$(command -v node)" >> "$GITHUB_ENV"
+      - name: Record Ruff
+        run: >-
+          python scripts/build_acceptance_bundle.py record
+          --source "$EVIDENCE_DIR" --name ruff --output automated-tests/ruff.txt --
+          ruff check .
+      - name: Record formatting
+        run: >-
+          python scripts/build_acceptance_bundle.py record
+          --source "$EVIDENCE_DIR" --name format --output automated-tests/format.txt --
+          ruff format --check .
+      - name: Record unit and integration tests
+        run: >-
+          python scripts/build_acceptance_bundle.py record
+          --source "$EVIDENCE_DIR" --name pytest
+          --output automated-tests/pytest-command.txt --
+          pytest --junitxml="$EVIDENCE_DIR/automated-tests/pytest.xml" --cov
+          --cov-report="xml:$EVIDENCE_DIR/automated-tests/coverage.xml"
+      - name: Browser acceptance
+        run: >-
+          python scripts/build_acceptance_bundle.py record
+          --source "$EVIDENCE_DIR" --name e2e --output automated-tests/e2e-results.json --
+          pytest tests/e2e --browser chromium --browser webkit
+          --tracing retain-on-failure
+          --output="$EVIDENCE_DIR/browser-results"
+      - name: Accessibility acceptance
+        env:
+          DATABASE_URL: sqlite:///${{ runner.temp }}/roleradar-a11y.sqlite3
+          AI_EXPLANATIONS_ENABLED: "false"
+          OPENAI_API_KEY: mocked-accessibility-provider
+          CV_LIBRARY_PATH: ${{ runner.temp }}/roleradar-a11y-cv
+          GENERATED_CV_PATH: ${{ runner.temp }}/roleradar-a11y-generated
+          API_BASE_URL: http://127.0.0.1:8000
+          ROLERADAR_NODE_MODULES: ${{ runner.temp }}/roleradar-node/node_modules
+        run: |
+          mkdir -p "$CV_LIBRARY_PATH"
+          printf '%s\n' '[SYNTHETIC] Accessibility Candidate' 'Built evidence-grounded AI systems with Python and APIs.' > "$CV_LIBRARY_PATH/synthetic-redacted-cv.txt"
+          python scripts/run_synthetic_acceptance_api.py &
+          API_PID=$!
+          streamlit run app/dashboard/streamlit_app.py --server.headless=true --server.address=127.0.0.1 --server.port=8501 &
+          UI_PID=$!
+          trap 'kill "$API_PID" "$UI_PID"' EXIT
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:8000/api/v1/health >/dev/null && \
+              curl --fail --silent http://127.0.0.1:8501/_stcore/health >/dev/null && break
+            sleep 1
+          done
+          python scripts/build_acceptance_bundle.py record \
+            --source "$EVIDENCE_DIR" --name accessibility \
+            --output automated-tests/accessibility-command.txt -- \
+            node scripts/run_accessibility.mjs \
+              --base-url http://127.0.0.1:8501 \
+              --output "$EVIDENCE_DIR/automated-tests/accessibility.json"
+      - name: Release Eval
+        run: >-
+          python scripts/build_acceptance_bundle.py record
+          --source "$EVIDENCE_DIR" --name eval --output automated-tests/eval-command.txt --
+          python -m app.evals.runner --dataset evals/datasets/v1.jsonl
+          --output "$EVIDENCE_DIR/automated-tests"
+      - name: Validate complete acceptance bundle
+        run: |
+          COMMIT="$(git rev-parse HEAD)"
+          python scripts/build_acceptance_bundle.py acceptance \
+            --source "$EVIDENCE_DIR" --commit "$COMMIT" --environment "GitHub Actions ubuntu-latest"
+          python scripts/build_acceptance_bundle.py \
+            --source "$EVIDENCE_DIR" --output-root "${{ runner.temp }}/artifacts/acceptance" \
+            --version v1 --model-id deterministic-release-v6 --prompt-version none \
+            --rubric-version eval-graders-v3 --dataset-version v1 \
+            --browser-versions chromium=playwright-managed,webkit=playwright-managed \
+            --node-version "$(node --version)"

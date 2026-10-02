@@ -1,226 +1,190 @@
-import os
+"""RoleRadar bilingual Calm Intelligence Streamlit entrypoint."""
 
-import pandas as pd
+from __future__ import annotations
+
+import os
+from collections.abc import Callable
+
 import streamlit as st
 
 from app.dashboard.client import APIClientError, RoleRadarClient
-from app.schemas import ApplicationStatus
-
-st.set_page_config(page_title="RoleRadar AI", page_icon="📡", layout="wide")
-client = RoleRadarClient(os.getenv("API_BASE_URL", "http://localhost:8000"))
-
-
-def render_job(job: dict) -> None:
-    analysis = job.get("analysis") or {}
-    classification = job.get("classification") or {}
-    score = analysis.get("fit_score", "—")
-    with st.expander(f"{score} · {job['company']} — {job['title']} ({job['location']})"):
-        left, right = st.columns([2, 1])
-        with left:
-            st.write(analysis.get("summary", "Analysis pending"))
-            st.caption(
-                f"{classification.get('category', 'Unclassified')} · "
-                f"{classification.get('confidence', 0):.0%} confidence"
-            )
-            st.markdown("**Strengths:** " + ", ".join(analysis.get("strengths", [])))
-            st.markdown("**Gaps:** " + ", ".join(analysis.get("gaps", [])))
-            if job.get("url"):
-                st.link_button("View posting", job["url"])
-        with right:
-            st.metric("Fit score", score)
-            st.write(analysis.get("recommendation", "Pending"))
-            selected = st.selectbox(
-                "Application status",
-                [status.value for status in ApplicationStatus],
-                index=[status.value for status in ApplicationStatus].index(job["status"]),
-                key=f"status-{job['id']}",
-            )
-            if selected != job["status"]:
-                client.patch(f"/api/v1/jobs/{job['id']}/status", {"status": selected})
-                st.rerun()
-
-
-st.title("📡 RoleRadar AI")
-st.caption("Your explainable career intelligence agent for Applied AI roles")
-
-dashboard_tab, add_tab, tracker_tab, profile_tab, digest_tab = st.tabs(
-    ["Dashboard", "Analyze a job", "Application tracker", "Profile", "Daily digest"]
+from app.dashboard.components.copilot_panel import render_copilot_panel
+from app.dashboard.components.navigation import navigation_items
+from app.dashboard.components.states import render_state
+from app.dashboard.pages import (
+    analyze,
+    applications,
+    cv_library,
+    dashboard,
+    digest,
+    jobs,
+    profile,
+    watchlist,
 )
+from app.dashboard.state import (
+    UIContext,
+    apply_locale_selection,
+    apply_route_selection,
+    queue_route_selection,
+    resolve_ui_locale,
+)
+from app.dashboard.theme import apply_theme
+from app.i18n.service import translate
+from app.schemas import Locale
 
-try:
-    with dashboard_tab:
-        data = client.get("/api/v1/dashboard")
-        status_counts = data["status_counts"]
-        cols = st.columns(4)
-        cols[0].metric("High priority", len(data["high_priority_jobs"]))
-        cols[1].metric("New", status_counts.get("New", 0))
-        cols[2].metric("Applied", status_counts.get("Applied", 0))
-        cols[3].metric("Interviews", status_counts.get("Interview", 0))
-        st.subheader("High priority jobs")
-        if not data["high_priority_jobs"]:
-            st.info("No high-priority jobs yet. Analyze a job to get started.")
-        for job in data["high_priority_jobs"]:
-            render_job(job)
-        chart_left, chart_right = st.columns(2)
-        with chart_left:
-            st.subheader("Skill gap trends")
-            if data["skill_gap_trends"]:
-                gaps = pd.DataFrame(data["skill_gap_trends"], columns=["Skill", "Jobs"])
-                st.bar_chart(gaps.set_index("Skill"))
-        with chart_right:
-            st.subheader("Weekly hiring trends")
-            if data["weekly_hiring_trends"]:
-                trends = pd.DataFrame(data["weekly_hiring_trends"])
-                st.line_chart(trends.set_index("week")[["jobs"]])
-        st.subheader("Recently added")
-        for job in data["recently_added_jobs"]:
-            render_job(job)
+PageRenderer = Callable[[RoleRadarClient, Locale], None]
+_LOCALE_COOKIE = "roleradar_locale"
 
-    with add_tab:
-        link_tab, text_tab = st.tabs(["Job link", "Paste job text"])
-        with link_tab:
-            st.subheader("Analyze from a job link")
-            st.caption(
-                "Paste a public job posting URL. RoleRadar will retrieve, record, and "
-                "analyze it automatically."
+
+def page_renderers() -> dict[str, PageRenderer]:
+    return {
+        "dashboard": dashboard.render_page,
+        "analyze": analyze.render_page,
+        "jobs": jobs.render_page,
+        "applications": applications.render_page,
+        "watchlist": watchlist.render_page,
+        "cv_library": cv_library.render_page,
+        "digest": digest.render_page,
+        "profile": profile.render_page,
+    }
+
+
+def _browser_locale() -> str | None:
+    try:
+        return st.context.locale
+    except (AttributeError, RuntimeError):
+        return None
+
+
+def _stored_browser_locale() -> str | None:
+    try:
+        return st.context.cookies.get(_LOCALE_COOKIE)
+    except (AttributeError, RuntimeError):
+        return None
+
+
+def _persist_browser_locale(locale: Locale) -> None:
+    st.html(
+        "<script>document.cookie="
+        f"'{_LOCALE_COOKIE}={locale}; Path=/; Max-Age=31536000; SameSite=Lax'"
+        "</script>",
+        unsafe_allow_javascript=True,
+    )
+
+
+def _render_shell_navigation(locale: Locale) -> str:
+    items = navigation_items(locale)
+    routes = [item.route for item in items]
+    pending_route = st.session_state.pop("ui.pending_route", None)
+    current = str(st.session_state.get("ui.route", "dashboard"))
+    if current not in routes:
+        current = "dashboard"
+    if pending_route in routes:
+        st.session_state["ui-navigation"] = pending_route
+    elif st.session_state.get("ui-navigation") not in routes:
+        st.session_state["ui-navigation"] = current
+    with st.sidebar:
+        st.markdown("## RoleRadar AI")
+        st.caption(translate(locale, "app.tagline"))
+        route = st.radio(
+            translate(locale, "accessibility.open_navigation"),
+            routes,
+            index=None,
+            format_func=lambda value: next(item.label for item in items if item.route == value),
+            label_visibility="collapsed",
+            key="ui-navigation",
+        )
+        apply_route_selection(current, route, st.session_state)
+    return route
+
+
+def _render_top_utilities(locale: Locale, client: RoleRadarClient) -> Locale:
+    private, language, health_column, settings = st.columns([4, 1.4, 1, 0.8])
+    with language:
+        selected_language = st.segmented_control(
+            translate(locale, "common.language"),
+            ["中文", "EN"],
+            default="中文" if locale == "zh-Hans" else "EN",
+            key="ui-language-control",
+            label_visibility="collapsed",
+        )
+        selected_locale: Locale = "zh-Hans" if selected_language == "中文" else "en"
+        if apply_locale_selection(locale, selected_locale, st.session_state, st.query_params):
+            _persist_browser_locale(selected_locale)
+    with private:
+        st.caption(translate(selected_locale, "app.private_local"))
+    with health_column:
+        try:
+            health = client.get("/api/v1/health")
+            key = "app.health.ready" if health.get("status") == "ok" else "app.health.degraded"
+            st.caption("● " + translate(selected_locale, key))
+        except APIClientError:
+            st.caption("○ " + translate(selected_locale, "app.health.unavailable"))
+    with settings:
+        if st.button(
+            translate(selected_locale, "common.settings"),
+            key="top-settings",
+            use_container_width=True,
+        ):
+            queue_route_selection(st.session_state, "profile")
+            st.rerun()
+    return selected_locale
+
+
+def render_app(client: RoleRadarClient) -> None:
+    apply_theme()
+    query_locale = st.query_params.get("lang")
+    explicit = st.session_state.get("ui.locale")
+    locale = resolve_ui_locale(
+        str(explicit) if explicit else None,
+        str(query_locale) if query_locale else None,
+        _browser_locale(),
+        _stored_browser_locale(),
+    )
+    locale = _render_top_utilities(locale, client)
+    route = _render_shell_navigation(locale)
+
+    context = UIContext(
+        route=route,
+        locale=locale,
+        job_id=(st.session_state.get("ui.selected_job_id") or None),
+        company_id=(st.session_state.get("ui.selected_company_id") or None),
+        session_id=(st.session_state.get("copilot.session_id") or None),
+        cv_document_ids=tuple(st.session_state.get("ui.selected_cv_ids", ())),
+    )
+
+    @st.dialog(translate(locale, "copilot.name"), width="large")
+    def render_mobile_copilot() -> None:
+        render_copilot_panel(context, client, key_prefix="mobile-copilot")
+
+    with st.container(key="mobile_copilot_launcher"):
+        if st.button(
+            translate(locale, "accessibility.open_copilot"),
+            key="mobile-copilot-open",
+            type="primary",
+            use_container_width=True,
+        ):
+            render_mobile_copilot()
+
+    content, copilot = st.columns([3.25, 1], gap="large")
+    with content:
+        try:
+            page_renderers()[route](client, locale)
+        except APIClientError:
+            render_state(
+                locale,
+                "error",
+                translate(locale, "error.unavailable"),
+                retry_key=f"page-retry-{route}",
             )
-            with st.form("job-url-form", clear_on_submit=True):
-                job_url = st.text_input(
-                    "Job link", placeholder="https://company.com/careers/jobs/..."
-                )
-                url_submitted = st.form_submit_button("Record & analyze", type="primary")
-            if url_submitted:
-                with st.spinner("Reading and analyzing the job page..."):
-                    st.session_state["last_analyzed_job"] = client.post(
-                        "/api/v1/jobs/from-url", {"url": job_url}
-                    )
+    with copilot, st.container(border=True, key="desktop_copilot_panel"):
+        render_copilot_panel(context, client, key_prefix="desktop-copilot")
 
-        with text_tab:
-            st.subheader("Paste the complete job posting")
-            st.caption(
-                "Paste everything from the job page, then review and correct the "
-                "extracted fields before RoleRadar saves or analyzes anything."
-            )
-            extracted = st.session_state.get("extracted_job")
-            if extracted is None:
-                with st.form("job-extraction-form", clear_on_submit=True):
-                    pasted_text = st.text_area(
-                        "Job posting text",
-                        height=480,
-                        placeholder=(
-                            "Paste the full job page here — header, company, location, "
-                            "URL, responsibilities, and requirements..."
-                        ),
-                    )
-                    extract_submitted = st.form_submit_button("Extract fields", type="primary")
-                if extract_submitted:
-                    st.session_state["extracted_job"] = client.post(
-                        "/api/v1/jobs/extract", {"text": pasted_text}
-                    )
-                    st.session_state.pop("last_analyzed_job", None)
-                    st.rerun()
-            else:
-                st.info("Review the extracted fields. Nothing has been saved yet.")
-                with st.form("job-confirmation-form"):
-                    company = st.text_input("Company", value=extracted["company"])
-                    title = st.text_input("Job title", value=extracted["title"])
-                    location = st.text_input("Location", value=extracted["location"])
-                    url = st.text_input("Job URL (optional)", value=extracted.get("url") or "")
-                    posting_date = st.date_input(
-                        "Posting date (optional)", value=extracted.get("posting_date")
-                    )
-                    description = st.text_area(
-                        "Job description", value=extracted["description"], height=400
-                    )
-                    confirm_submitted = st.form_submit_button("Confirm & analyze", type="primary")
-                reset_col, _ = st.columns([1, 4])
-                if reset_col.button("Start over", use_container_width=True):
-                    st.session_state.pop("extracted_job", None)
-                    st.rerun()
-                if confirm_submitted:
-                    payload = {
-                        "company": company,
-                        "title": title,
-                        "location": location,
-                        "url": url or None,
-                        "posting_date": posting_date.isoformat() if posting_date else None,
-                        "description": description,
-                        "source": "pasted_text",
-                    }
-                    st.session_state["last_analyzed_job"] = client.post("/api/v1/jobs", payload)
-                    st.session_state.pop("extracted_job", None)
-                    st.rerun()
 
-        completed_job = st.session_state.get("last_analyzed_job")
-        if completed_job:
-            st.success(f"Analysis complete: {completed_job['analysis']['fit_score']}/100")
-            render_job(completed_job)
+def main() -> None:
+    st.set_page_config(page_title="RoleRadar AI", page_icon="◉", layout="wide")
+    render_app(RoleRadarClient(os.getenv("API_BASE_URL", "http://localhost:8000")))
 
-    with tracker_tab:
-        jobs = client.get("/api/v1/jobs")
-        if jobs:
-            st.dataframe(
-                [
-                    {
-                        "Company": job["company"],
-                        "Role": job["title"],
-                        "Location": job["location"],
-                        "Fit": (job.get("analysis") or {}).get("fit_score"),
-                        "Status": job["status"],
-                        "Added": job["created_at"][:10],
-                    }
-                    for job in jobs
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-            for job in jobs:
-                render_job(job)
-        else:
-            st.info("No tracked jobs yet.")
 
-    with profile_tab:
-        profile = client.get("/api/v1/profile")
-        with st.form("profile-form"):
-            name = st.text_input("Name", profile["name"])
-            fields = {}
-            for key, label in [
-                ("target_roles", "Target roles"),
-                ("preferred_locations", "Preferred locations"),
-                ("future_locations", "Future locations"),
-                ("domain_strengths", "Domain strengths"),
-                ("technical_strengths", "Technical strengths"),
-                ("development_gaps", "Development gaps"),
-            ]:
-                fields[key] = st.text_input(label, ", ".join(profile[key]))
-            save_profile = st.form_submit_button("Save profile", type="primary")
-        if save_profile:
-            payload = {"name": name}
-            payload.update(
-                {
-                    key: [item.strip() for item in value.split(",") if item.strip()]
-                    for key, value in fields.items()
-                }
-            )
-            client.put("/api/v1/profile", payload)
-            st.success(
-                "Profile saved. Existing analyses remain auditable; "
-                "re-add or reanalyze jobs explicitly."
-            )
-
-    with digest_tab:
-        digest = client.get("/api/v1/digest/daily")
-        st.caption(f"Generated {digest['generated_at']}")
-        st.subheader("High-priority new jobs")
-        for job in digest["high_priority_jobs"]:
-            render_job(job)
-        st.subheader("New companies")
-        st.write(", ".join(digest["new_companies"]) or "None")
-        st.subheader("Emerging skills")
-        st.write(digest["emerging_skills"] or "No trend yet")
-        st.subheader("Hiring trends")
-        for trend in digest["hiring_trends"]:
-            st.write(f"• {trend}")
-except APIClientError as exc:
-    st.error(str(exc))
-    st.info("Start the API with: uvicorn app.main:app --reload")
+if __name__ == "__main__":
+    main()

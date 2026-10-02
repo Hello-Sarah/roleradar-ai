@@ -1,14 +1,34 @@
+# Local configuration and credentials
 .env
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.py[cod]
 *.db
+*.sqlite
+*.sqlite3
 .pytest_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 htmlcov/
 dist/
 build/
 *.egg-info/
 .DS_Store
 .worktrees/
+.superpowers/
+
+# Private runtime artifacts
+data/cv_library/
+data/generated_cvs/
+private-evidence/
+release-evidence/
+portfolio/release-evidence/
+/artifacts/acceptance/
+
+# Local static-hosting output
+.pages/
+site/
+gh-pages/
