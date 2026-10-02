@@ -417,3 +417,23 @@ Do not push or merge without new explicit authorization.
 5. Use the fresh full-SHA bundle for the current candidate. Earlier passing catalogs do not
    override the final review's demonstrated product coverage gaps.
 6. Update this handoff and the ledger after review. No push/merge without explicit authorization.
+
+## 2026-10-02 Safari acceptance follow-up
+
+- Merged the reviewed V1 candidate into local `main` at merge commit `20cb01b` and reran the full
+  suite successfully before beginning native Safari checks.
+- Ran the app in current macOS Safari against an isolated SQLite database. Verified Chinese and
+  English switching, dashboard, Analyze Job, Jobs, Applications, Watch List, CV Library, Digest,
+  Profile, deterministic score evidence, and grounded read-only Copilot answers.
+- Safari exposed a bilingual action-routing defect: `把这个职位标记为已申请` was treated as a
+  read-only question, while the deterministic proposal fallback only recognized English status
+  labels and action verbs. The fix adds bilingual intent detection and Chinese status aliases.
+- Added regression coverage at both UI intent-routing and deterministic proposal boundaries. The
+  natural Chinese request now renders a pending confirmation showing `新增` → `已申请`; cancelling
+  leaves the job `New` and creates no application event.
+- Fresh post-fix verification: `511 passed`, 88% aggregate coverage, and `ruff check app tests`
+  reports no findings. Native Safari desktop smoke passed. Narrow Safari remains covered by the
+  existing 390px WebKit E2E rather than a separate native-window run.
+- The repository's older unversioned local `roleradar.db` was not modified. Startup intentionally
+  refused to migrate that unknown schema; use a new database or design an explicit export/migration
+  path before attempting to reuse it.

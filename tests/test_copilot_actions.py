@@ -327,6 +327,22 @@ def test_adversarial_jd_cannot_trigger_automatic_or_ambiguous_action(db) -> None
     assert db.query(CopilotActionAudit).count() == 0
 
 
+def test_chinese_status_change_request_creates_typed_proposal_without_model(db) -> None:
+    """Catch bilingual UI intents being rejected by the deterministic fallback."""
+    from app.copilot.context import ContextSelection, build_context
+    from app.copilot.service import propose_action
+
+    job = _job(db)
+    context = build_context(ContextSelection(job_id=job.id), db)
+
+    proposal = propose_action("把这个职位标记为已申请", context, Settings())
+
+    assert proposal.proposal_type == "change_application_status"
+    assert proposal.target_id == job.id
+    assert proposal.expected_status.value == "New"
+    assert proposal.status.value == "Applied"
+
+
 def test_unconfirmed_tailored_cv_proposal_generates_no_file(db, tmp_path, monkeypatch) -> None:
     from datetime import UTC, datetime
 

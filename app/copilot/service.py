@@ -326,11 +326,23 @@ def propose_action(
             )
         except ValueError:
             pass
+    localized_statuses = {
+        "新增": ApplicationStatus.NEW,
+        "已收藏": ApplicationStatus.SAVED,
+        "已申请": ApplicationStatus.APPLIED,
+        "面试中": ApplicationStatus.INTERVIEW,
+        "已拒绝": ApplicationStatus.REJECTED,
+        "已获 offer": ApplicationStatus.OFFER,
+        "已忽略": ApplicationStatus.IGNORED,
+    }
     requested_status = next(
+        (status for label, status in localized_statuses.items() if label in normalized),
+        None,
+    ) or next(
         (status for status in ApplicationStatus if status.value.casefold() in normalized), None
     )
     if requested_status is not None and any(
-        word in normalized for word in ("status", "mark", "change")
+        word in normalized for word in ("status", "mark", "change", "状态", "标记", "更改")
     ):
         return ChangeApplicationStatusProposal(
             target_id=context.job.id,

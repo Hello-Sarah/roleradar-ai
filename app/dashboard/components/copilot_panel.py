@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import MutableMapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -37,6 +38,45 @@ class ConfirmationView:
     fields: tuple[ConfirmationField, ...]
     confirm_label: str
     cancel_label: str
+
+
+def is_action_request(prompt: str) -> bool:
+    """Separate state-changing requests from read-only discussion in both UI locales."""
+    normalized = prompt.strip().casefold().removeprefix("please ").removeprefix("请")
+    if prompt.rstrip().endswith(("?", "？")):
+        return False
+    if normalized.startswith(
+        (
+            "save ",
+            "change ",
+            "mark ",
+            "record ",
+            "set ",
+            "create ",
+            "add ",
+            "update ",
+            "reanalyze ",
+            "generate ",
+            "保存",
+            "更改",
+            "标记",
+            "记录",
+            "设置",
+            "创建",
+            "添加",
+            "更新",
+            "重新分析",
+            "生成",
+        )
+    ):
+        return True
+    return (
+        re.search(
+            r"^把.+(?:保存|更改|标记|记录|设置|创建|添加|更新|重新分析|生成)",
+            normalized,
+        )
+        is not None
+    )
 
 
 _CONFIRMATION_FIELDS = (
@@ -475,32 +515,7 @@ def _render_copilot_panel(
             {"role": "user", "body": prompt, "sources": []},
         )
         # Read-only discussion has its own contract and cannot propose writes.
-        normalized = prompt.strip().casefold().removeprefix("please ").removeprefix("请")
-        action_request = normalized.startswith(
-            (
-                "save ",
-                "change ",
-                "mark ",
-                "record ",
-                "set ",
-                "create ",
-                "add ",
-                "update ",
-                "reanalyze ",
-                "generate ",
-                "保存",
-                "更改",
-                "标记",
-                "记录",
-                "设置",
-                "创建",
-                "添加",
-                "更新",
-                "重新分析",
-                "生成",
-            )
-        )
-        readonly = not action_request or prompt.rstrip().endswith(("?", "？"))
+        readonly = not is_action_request(prompt)
         response = client.post(
             "/api/v1/copilot/answer" if readonly else "/api/v1/copilot/propose",
             {

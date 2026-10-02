@@ -9,6 +9,22 @@ import pytest
 from app.i18n.service import translate
 
 
+@pytest.mark.parametrize(
+    ("prompt", "expected"),
+    [
+        ("Mark this job Applied", True),
+        ("把这个职位标记为已申请", True),
+        ("为什么这个评分不高？", False),
+        ("把这个评分解释清楚", False),
+    ],
+)
+def test_copilot_action_intent_detection_is_bilingual(prompt: str, expected: bool) -> None:
+    """Catch Chinese mutation requests being routed to the read-only answer endpoint."""
+    from app.dashboard.components.copilot_panel import is_action_request
+
+    assert is_action_request(prompt) is expected
+
+
 def test_duplicate_job_cards_use_region_scoped_stable_keys() -> None:
     """Catch widget collisions when one job appears in two dashboard regions."""
     from app.dashboard.state import stable_key
