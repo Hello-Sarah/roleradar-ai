@@ -21,8 +21,8 @@ skill gaps, and choose a next action. It is intentionally not a job board.
 ## Architecture
 
 RoleRadar AI is a modular monolith: FastAPI provides the HTTP boundary, SQLAlchemy owns private
-persistence, and Streamlit is a thin client. Deterministic classification and scoring stay separate
-from optional LLM extraction and explanation so the decision remains inspectable and available when
+persistence, and Streamlit is a thin client. JD extraction, classification, and scoring are
+deterministic and stay separate from optional LLM explanations, so decisions remain inspectable when
 the provider is unavailable.
 
 ```text

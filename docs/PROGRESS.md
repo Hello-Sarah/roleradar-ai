@@ -86,6 +86,13 @@ stable API keys; extra top spacing clears the framework toolbar at desktop and n
 Rendered bilingual-route and spacing regressions protect both corrections. Generated summaries
 explicitly list known P2 items (or None) instead of hiding them behind a READY flag.
 
+The Task 11 behavior candidate `550c84627f4d564edad97da6673cbc9e0c9b01cb` passed fresh verification:
+444 tests at 88% coverage; 20/20 Chromium/WebKit E2E; 130/130 Eval with zero zero-tolerance failures;
+40/40 Must IDs; 372/372 bilingual keys; 30 screenshots and six required passing-flow traces;
+zero AA, unresolved, or keyboard failures across eight routes and twelve dynamic states. All older
+bundles remained byte-for-byte unchanged. This snapshot is not evidence for a later documentation
+commit: the final documentation candidate must generate its own complete full-SHA bundle.
+
 Final Task 11 verification is generated from its clean full-SHA candidate into
 `artifacts/acceptance/v1/<full-SHA>/`; inspect that commit's summary/manifest before claiming a pass.
 Ignored evidence is local, not included in a clone. The Task 10 snapshot above is historical,
